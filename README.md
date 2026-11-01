@@ -1,6 +1,15 @@
 # Shadow Server Command — Minecraft Edition
 
 
+## Current package: corrected startup polling scripts (r2)
+
+**[Download Windows package r2](https://github.com/Ghost9353/ShadowServerCommand/raw/refs/heads/main/downloads/SSC-MC-agent-service-startup-repair-r2-win-x64.zip)** · [Source r2](https://github.com/Ghost9353/ShadowServerCommand/raw/refs/heads/main/downloads/SSC-MC-agent-service-startup-repair-r2-source.zip)
+
+[Issue #1 diagnosis and validation](docs/CI-JOURNAL-FILTER-REPAIR.md): fixed subsecond timestamp loss, fresh-process matching, journal rotation/partial reads, and fixture secret restoration. PowerShell 5.1/7 tests, all 61 .NET tests, and the complete real Windows SCM/update/failure/recovery/tamper/rollback regression passed: [green CI](https://github.com/Ghost9353/ShadowServerCommand/actions/runs/41363555123).
+
+Agent and Watchdog binaries are unchanged, byte-for-byte. No production certificates, keys, configuration or AM4/AM5 state are changed by this correction. Keep the scripts folder together; the new shared journal helper is required by the updater and verifier.
+
+
 ## Current Agent service-startup repair
 
 **[Download the corrected Windows x64 package](https://github.com/Ghost9353/ShadowServerCommand/raw/refs/heads/main/downloads/SSC-MC-agent-service-startup-repair-win-x64.zip)**
