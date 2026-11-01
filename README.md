@@ -1,5 +1,18 @@
 # Shadow Server Command — Minecraft Edition
 
+## TLS heartbeat repair — existing AM4/AM5 installations
+
+**[Download the repaired Agent + Watchdog Windows x64 package](https://github.com/Ghost9353/ShadowServerCommand/raw/refs/heads/main/downloads/SSC-MC-tls-heartbeat-repair-win-x64.zip)**
+
+- [AM4/AM5 update commands, verification and rollback](docs/TLS-HEARTBEAT-REPAIR.md)
+- [Root cause and executed Linux/Windows tests](docs/TLS-REPAIR-REPORT.md)
+- [Current source ZIP](https://github.com/Ghost9353/ShadowServerCommand/raw/refs/heads/main/downloads/SSC-MC-tls-heartbeat-repair-source.zip)
+
+This binary-only repair preserves existing configuration, certificate identities/pins, encrypted secrets and history. It restarts only SSC services, never Minecraft. Windows Schannel tests pass; the runbook includes live checks for your actual service identities and Discord channel.
+
+The original full Windows ZIP below predates this TLS repair. Existing installations should apply the repair package above; use the original package only as a baseline/rollback reference.
+
+
 ## Download to your Windows PC
 
 - [Download the ready-built Windows x64 package](https://github.com/Ghost9353/ShadowServerCommand/raw/refs/heads/main/downloads/SSC-MC-watchdog-win-x64.zip)
@@ -11,7 +24,7 @@ Save the Windows ZIP to **Downloads**, right-click it in File Explorer, and sele
 
 Required runtimes: .NET 8 Windows Desktop Runtime x64 for the desktop, ASP.NET Core Runtime 8 x64 on AM4 for the Agent, and .NET Runtime 8 x64 on AM5 for the Watchdog. Follow the installation guide before starting either service.
 
-Release build: zero warnings/errors; 55 automated tests passed in the Linux development environment. Windows installation/rendering and real Discord-channel delivery remain to be tested on the actual PCs. See [the report](docs/WATCHDOG-REPORT.md).
+TLS repair Release build: zero warnings/errors; 61 automated tests passed on Linux and Windows CI. Actual service-account deployment and real Discord delivery after the repair remain to be verified on the PCs. See [the report](docs/WATCHDOG-REPORT.md).
 
 
 **SSC-MC · v0.1.0 Alpha · desktop simulation + independent watchdog extension**

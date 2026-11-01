@@ -1,0 +1,2 @@
+996d20b71a1a5afb86459399014402d49a714c7092e91de15334dfed078f9442  SSC-MC-tls-heartbeat-repair-source.zip
+f5277a008476d03430b186f53bad84407ba66be0508a0f652cdb46a0697dff91  SSC-MC-tls-heartbeat-repair-win-x64.zip
