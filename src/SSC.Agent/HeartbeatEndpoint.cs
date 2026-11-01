@@ -7,7 +7,7 @@ using SSC.Infrastructure;
 namespace SSC.Agent;
 public static class HeartbeatEndpoint
 {
-    public static void Configure(KestrelServerOptions kestrel,HeartbeatOptions options,X509Certificate2 certificate)
+    public static void Configure(KestrelServerOptions kestrel,HeartbeatOptions options,X509Certificate2 certificate, ILogger? logger = null)
     {
         options.Validate();
         kestrel.AddServerHeader=false;kestrel.Limits.MaxRequestBodySize=1024;
@@ -15,7 +15,7 @@ public static class HeartbeatEndpoint
         {
             https.ServerCertificate=certificate;https.SslProtocols=SslProtocols.Tls12 | SslProtocols.Tls13;
             https.ClientCertificateMode=ClientCertificateMode.RequireCertificate;
-            https.ClientCertificateValidation=(client,_,_)=>CertificatePins.Matches(client,options.TrustedClientSha256);
+            https.ClientCertificateValidation=(client,chain,errors)=>CertificatePins.ValidatePeer(client,options.TrustedClientSha256,TlsCertificatePurpose.Client,logger,chain,errors);
         }));
     }
     public static void Map(WebApplication app,HeartbeatOptions options) => app.MapGet("/heartbeat",(HttpContext context,WindowsHeartbeatCollector collector)=>

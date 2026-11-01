@@ -1,4 +1,6 @@
 using System.Net;
+using System.Net.Security;
+using Microsoft.Extensions.Logging;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using SSC.Core;
@@ -63,6 +65,22 @@ public static class CertificatePins
     public static bool Matches(X509Certificate2? certificate, string pin) => certificate is not null && Valid(pin) &&
         certificate.NotBefore.ToUniversalTime() <= DateTime.UtcNow && certificate.NotAfter.ToUniversalTime() > DateTime.UtcNow &&
         CryptographicOperations.FixedTimeEquals(certificate.GetCertHash(HashAlgorithmName.SHA256), Convert.FromHexString(pin));
+    public static bool ValidatePeer(X509Certificate2? certificate, string pin, TlsCertificatePurpose purpose,
+        ILogger? logger = null, X509Chain? chain = null, SslPolicyErrors errors = SslPolicyErrors.None)
+    {
+        var reason = certificate is null ? "CertificateMissing" : !Valid(pin) ? "ConfiguredPinInvalid" :
+            !Matches(certificate, pin) ? "FingerprintMismatchOrExpired" : TlsCertificateLoader.PeerRejection(certificate, purpose);
+        if ((errors & SslPolicyErrors.RemoteCertificateNotAvailable) != 0) reason = "CertificateMissing";
+        if (reason is not null)
+            logger?.LogWarning("TLS peer rejected: purpose={Purpose}, reason={Reason}, policyErrors={PolicyErrors}, chainStatus={ChainStatus}",
+                purpose, reason, errors, chain is null ? "unavailable" : string.Join(",", chain.ChainStatus.Select(s => s.Status.ToString())));
+        else
+            logger?.LogDebug("TLS peer accepted by SHA256 pin: purpose={Purpose}, policyErrors={PolicyErrors}", purpose, errors);
+        // The existing pinned leaf, validity and EKU are the trust policy. SAN/name and CA-chain
+        // errors do not replace that policy; never accept an unpinned peer, even if CA-trusted.
+        return reason is null;
+    }
+
 }
 public interface ISecretStore { string Read(string name); }
 public sealed class MachineSecretStore : ISecretStore

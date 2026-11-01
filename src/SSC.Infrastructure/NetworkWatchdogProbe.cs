@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.Extensions.Logging;
 using System.Net.NetworkInformation;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -12,13 +13,14 @@ public sealed class NetworkWatchdogProbe : IWatchdogProbe, IDisposable
     private readonly WatchdogOptions _options;
     private readonly HttpClient _http;
     private readonly X509Certificate2 _certificate;
-    public NetworkWatchdogProbe(WatchdogOptions options, ISecretStore secrets)
+    private readonly ILogger<NetworkWatchdogProbe>? _logger;
+    public NetworkWatchdogProbe(WatchdogOptions options, ISecretStore secrets, ILogger<NetworkWatchdogProbe>? logger = null)
     {
-        options.Validate();_options=options;
-        _certificate=new X509Certificate2(options.ClientCertificatePath,secrets.Read(options.CertificatePasswordSecret),X509KeyStorageFlags.EphemeralKeySet);
+        options.Validate();_options=options;_logger=logger;
+        _certificate=TlsCertificateLoader.Load(options.ClientCertificatePath,secrets,options.CertificatePasswordSecret,TlsCertificatePurpose.Client,logger);
         var handler=new HttpClientHandler { AllowAutoRedirect=false,UseProxy=false,ClientCertificateOptions=ClientCertificateOption.Manual,SslProtocols=SslProtocols.Tls12 | SslProtocols.Tls13 };
         handler.ClientCertificates.Add(_certificate);
-        handler.ServerCertificateCustomValidationCallback=(_,server,_,errors)=>errors!=SslPolicyErrors.RemoteCertificateNotAvailable && CertificatePins.Matches(server,options.TrustedServerSha256);
+        handler.ServerCertificateCustomValidationCallback=(_,server,chain,errors)=>CertificatePins.ValidatePeer(server,options.TrustedServerSha256,TlsCertificatePurpose.Server,logger,chain,errors);
         _http=new(handler){Timeout=TimeSpan.FromSeconds(options.ProbeTimeoutSeconds), MaxResponseContentBufferSize=16384};
     }
     public async Task<ProbeSample> CheckAsync(CancellationToken ct)
@@ -35,14 +37,21 @@ public sealed class NetworkWatchdogProbe : IWatchdogProbe, IDisposable
         try
         {
             using var response=await _http.GetAsync($"https://{_options.HostAddress}:{_options.AgentPort}/heartbeat",ct);
-            if(!response.IsSuccessStatusCode) return(null,sw.Elapsed.TotalMilliseconds,true,"HTTP "+(int)response.StatusCode);
+            if(!response.IsSuccessStatusCode) { _logger?.LogWarning("Heartbeat HTTP response rejected: statusCode={StatusCode}",(int)response.StatusCode);return(null,sw.Elapsed.TotalMilliseconds,true,"HTTP "+(int)response.StatusCode); }
             // Bound response memory and reject stale/future cached heartbeats.
             var hb=JsonSerializer.Deserialize<AgentHeartbeat>(await response.Content.ReadAsStringAsync(ct),new JsonSerializerOptions(JsonSerializerDefaults.Web));
             if(hb is null || Math.Abs((DateTimeOffset.UtcNow-hb.ObservedAt).TotalSeconds)>30) return(null,sw.Elapsed.TotalMilliseconds,true,"invalid or stale heartbeat / clock skew");
+            _logger?.LogDebug("Authenticated heartbeat received: agentObservedUtc={ObservedUtc}, latencyMs={LatencyMs}, healthy={Healthy}",hb.ObservedAt,sw.Elapsed.TotalMilliseconds,hb.AgentHealthy);
             return(hb,sw.Elapsed.TotalMilliseconds,true,hb.AgentHealthy?"healthy":"agent unhealthy");
         }
         catch(Exception ex) when(ex is HttpRequestException or TaskCanceledException or JsonException)
-        { ct.ThrowIfCancellationRequested();return(null,null,false,"timeout, TLS/authentication or transport failure"); }
+        {
+            ct.ThrowIfCancellationRequested();
+            var kind=ex is JsonException ? "InvalidHeartbeatJson" : ex is TaskCanceledException ? "HeartbeatTimeout" : ex is HttpRequestException h ? h.HttpRequestError.ToString() : "TransportFailure";
+            _logger?.LogWarning("Heartbeat request failed: failureKind={FailureKind}, latencyMs={LatencyMs}",kind,sw.Elapsed.TotalMilliseconds);
+            TlsCertificateLoader.LogFailure(_logger,"Heartbeat request",kind,ex);
+            return(null,null,false,kind);
+        }
     }
     private async Task<(bool Reachable,bool Icmp,bool AgentTcp)> NetworkAsync(CancellationToken ct)
     {

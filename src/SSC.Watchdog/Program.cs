@@ -1,11 +1,13 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using SSC.Infrastructure;
 using SSC.Watchdog;
 
 try
 {
+    Serilog.Log.Logger=OperationalLogging.CreateBootstrapLogger("Watchdog");
     var builder=Host.CreateDefaultBuilder(args).UseContentRoot(AppContext.BaseDirectory)
         .ConfigureAppConfiguration(c=>c.AddJsonFile(Path.Combine(ServicePaths.Root,"Watchdog","service.json"),optional:true).AddEnvironmentVariables("SSC_"))
         .UseWindowsService(o=>o.ServiceName="SSC.Watchdog").AddOperationalLogging("Watchdog")
@@ -35,7 +37,10 @@ try
     }
     await host.RunAsync();return Environment.ExitCode;
 }
-catch(Exception)
+catch(Exception ex)
 {
+    TlsCertificateLoader.LogFailure(new Serilog.Extensions.Logging.SerilogLoggerFactory(Serilog.Log.Logger, dispose: false).CreateLogger("SSC.Tls"),"Watchdog startup","startup",ex);
     Console.Error.WriteLine("SSC.Watchdog failed. Check configuration, private endpoint, certificates, DPAPI ACLs, Event Log source and writable data directory.");return 1;
 }
+
+finally { Serilog.Log.CloseAndFlush(); }
