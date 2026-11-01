@@ -20,6 +20,13 @@ jobs:
       - name: Build and test
         shell: pwsh
         run: ./scripts/verify.ps1
+      - name: Publish Agent service fixture
+        shell: pwsh
+        run: dotnet publish src/SSC.Agent -c Release -r win-x64 --self-contained false -o artifacts/service-fixture
+      - name: Real SCM startup under virtual service identity
+        timeout-minutes: 5
+        shell: pwsh
+        run: ./tests/Windows/AgentServiceStartup.ps1 -PublishDirectory ./artifacts/service-fixture
       - uses: actions/upload-artifact@v4
         if: always()
         with:
