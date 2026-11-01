@@ -1,0 +1,23 @@
+# Watchdog troubleshooting
+
+**Service fails to start:** verify required x64 runtime, executable path, configuration JSON and Event Log source. Defaults are deliberately disabled. Check Windows Application log and role JSON logs; if logging cannot initialize, run the executable from an elevated console for a sanitized startup error. The installer must run before DPAPI provisioning so the virtual service identity exists. A malformed/read-only/full/corrupt database stops the service rather than pretending it is monitoring; preserve the archive and resolve permissions/storage before retrying. SCM failure actions restart it; repeated failure requires investigation.
+
+**Certificate or DPAPI error:** provision the matching PFX password on that same PC using Set-SscSecret, check PFX file ACLs, check UTC system clocks and validity dates, and compare SHA256 pins to the opposite certificate. Machine-protected blobs cannot be copied to another computer. Do not disable TLS validation as a workaround. No bearer key or anonymous heartbeat fallback exists.
+
+**Agent unavailable while AM4 reachable:** verify SSC.Agent, port 27443, exact private bind address, Private firewall profile, trusted AM5 source IP and both pins. Certificate expiry/auth failure is an agent incident, not proof the PC lost power. Network reachability checks use ICMP plus TCP to the agent port and game port; firewalls can suppress all evidence even when a host is alive.
+
+**Unreachable:** possible Windows crash, power failure, frozen host or network failure; inspect actual hardware/router/switch after receiving the alert. Do not report a definite cause without evidence. AM5 also needs working networking and internet to deliver the alert; local events queue while Discord is unreachable.
+
+**Minecraft unknown:** configure a unique Java executable + command-line marker and verify WMI permissions under the service account. Missing command-line/executable access is unknown. Do not grant local Administrator solely to make this field work. For counters, consider only the built-in Performance Monitor Users group for the Agent virtual account; document any WMI namespace read grants. Java heap/TPS/MSPT are outside this feature and remain unavailable.
+
+**Potentially unresponsive with healthy players:** inspect status protocol support/enable-status and a firewall/proxy before treating this as a game freeze. A status response is not a tick-health guarantee. To disable this optional check deliberately, stop the Watchdog, set `Watchdog.MinecraftStatusEnabled=false` in its service.json, and restart. Never modify Minecraft's server.properties automatically. Startup/loading may temporarily fail port/status checks and open an incident if it exceeds the confirmation threshold.
+
+**Discord queued/retry:** check outbound HTTPS access, channel webhook availability and Internet access from AM5. Retry delay caps at 5 minutes within each burst, with a 30-minute cooldown after eight failures. 429 respects server retry hints. Pending events persist across reboots. No secret URL or exception text is logged. Test just once; do not spam queued tests.
+
+**Discord Held:** 400/401/403/404 or invalid URI needs operator action. Repair/rotate the secret using the hidden prompt, stop the service, run `SSC.Watchdog.exe --retry-alerts`, then start it. Check the specific channel. Rare duplicates after an ambiguous network failure are possible; compare stable event IDs. Both incident notification creation and retry state are durable.
+
+**Desktop stale/missing:** run desktop on the same AM5 PC, use Ctrl+W/open watchdog, and inspect the sanitized ProgramData Status directory read ACL. It is not a remote viewer and does not read AM4's service database over a share. No snapshot or one older than 45s means status unknown/stale; the desktop's other modules still use Phase 1 simulation. Closing the desktop does not stop either service.
+
+**AM5 sleep/reboot:** Automatic services do not run while the PC sleeps or is off. Review Windows power policy if continuous coverage is required. The first startup check records the interval and resets consecutive confirmations; active incidents explicitly include an unobserved gap. You cannot reconstruct outages that fully began and ended while AM5 was offline. A second independent monitor is required to cover AM5 failure itself.
+
+**Expected maintenance:** no Minecraft lifecycle intent API exists yet. Planned Java shutdown is indistinguishable from an unexpected stop and will alert. Pause or coordinate monitoring intentionally and retain the resulting gap record; never erase history to hide maintenance. Existing security monitoring is not replaced or modified.

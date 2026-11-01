@@ -1,0 +1,20 @@
+.dotnet/
+**/bin/
+**/obj/
+.vs/
+TestResults/
+*.user
+*.db
+*.db-shm
+*.db-wal
+logs/
+artifacts/
+
+.nuget/
+.dotnet-tmp/
+
+# Private certificates, DPAPI blobs and deployment configuration
+*.pfx
+*.p12
+*.bin
+service.json

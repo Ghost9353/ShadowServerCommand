@@ -1,0 +1,11 @@
+{
+  "Heartbeat": {
+    "Enabled": true,
+    "BindAddress": "192.168.1.40",
+    "Port": 27443,
+    "CertificatePath": "",
+    "TrustedClientSha256": "REPLACE_WITH_WATCHDOG_SHA256",
+    "MinecraftExecutablePath": "C:\\Program Files\\Java\\jdk-21\\bin\\java.exe",
+    "MinecraftCommandLineContains": "@libraries/net/neoforged/neoforge/21.1.250/win_args.txt"
+  }
+}

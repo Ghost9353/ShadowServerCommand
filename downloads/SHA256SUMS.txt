@@ -1,0 +1,2 @@
+21e871f5266b5e52647d8044c240cfefae197e268f7d1233d11b83073e3bf3ec  SSC-MC-watchdog-source.zip
+30d8c3485cf72416adeae0b79eeb2a0fcb51273c1b58be4458113cd9268eb2ee  SSC-MC-watchdog-win-x64.zip

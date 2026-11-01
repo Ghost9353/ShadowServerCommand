@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>12</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+    <Version>0.1.0-alpha</Version>
+    <Company>Shadow Server Command</Company>
+    <Product>Shadow Server Command — Minecraft Edition</Product>
+  </PropertyGroup>
+</Project>

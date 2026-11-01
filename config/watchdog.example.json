@@ -1,0 +1,23 @@
+{
+  "Watchdog": {
+    "Enabled": true,
+    "HostAddress": "192.168.1.40",
+    "AgentPort": 27443,
+    "MinecraftPort": 25565,
+    "ProbeTimeoutSeconds": 4,
+    "ClientCertificatePath": "",
+    "TrustedServerSha256": "REPLACE_WITH_AGENT_SHA256",
+    "Detection": {
+      "IntervalSeconds": 15,
+      "FailureThreshold": 3,
+      "RecoveryThreshold": 3,
+      "CrashWindowMinutes": 15,
+      "CrashBurstCount": 3
+    }
+  },
+  "Discord": {
+    "WebhookSecret": "discord-webhook",
+    "RetryBurst": 8,
+    "CooldownSeconds": 1800
+  }
+}
