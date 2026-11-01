@@ -22,7 +22,10 @@ jobs:
         run: ./scripts/verify.ps1
       - name: Publish Agent service fixture
         shell: pwsh
-        run: dotnet publish src/SSC.Agent -c Release -r win-x64 --self-contained false -o artifacts/service-fixture
+        run: |
+          dotnet publish src/SSC.Agent -c Release -r win-x64 --self-contained false -o artifacts/service-fixture
+          if ($LASTEXITCODE) { throw 'Publish failed' }
+          ./scripts/Write-SscDeploymentManifest.ps1 -Role Agent -Directory ./artifacts/service-fixture
       - name: Real SCM startup under virtual service identity
         timeout-minutes: 5
         shell: pwsh

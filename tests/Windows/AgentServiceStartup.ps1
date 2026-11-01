@@ -33,7 +33,7 @@ try {
     Remove-Item "Cert:\LocalMachine\My\$($agentCert.Thumbprint)" -DeleteKey
     & sc.exe create SSC.Agent binPath= "`"$target\SSC.Agent.exe`"" obj= 'NT SERVICE\SSC.Agent' start= auto | Out-Null
     if($LASTEXITCODE -ne 0){throw 'Fixture service creation failed.'}
-    if(-not [Diagnostics.EventLog]::SourceExists('SSC.Agent')){New-EventLog -LogName Application -Source SSC.Agent}
+    if(-not [Diagnostics.EventLog]::SourceExists('SSC.Agent')){[Diagnostics.EventLog]::CreateEventSource('SSC.Agent','Application')}
     & icacls.exe $root /grant 'NT SERVICE\SSC.Agent:(RX)' | Out-Null
     & icacls.exe "$root\Agent" /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' 'NT SERVICE\SSC.Agent:(OI)(CI)M' | Out-Null
     & icacls.exe "$root\Secrets" /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' 'NT SERVICE\SSC.Agent:(OI)(CI)RX' | Out-Null
@@ -42,6 +42,7 @@ try {
     & sc.exe start SSC.Agent | Out-File "$artifacts\sc-start.txt"
     if($LASTEXITCODE -ne 0){throw "SCM rejected startup after $($timer.Elapsed.TotalSeconds) seconds."}
     (Get-Service SSC.Agent).WaitForStatus('Running',[TimeSpan]::FromSeconds(20))
+    $scmSeconds=$timer.Elapsed.TotalSeconds
     Add-Type -TypeDefinition @'
 using System;
 using System.Net.Http;
@@ -63,7 +64,18 @@ public static class SscFixtureHttp {
         try {$heartbeat=[SscFixtureHttp]::Get($clientCert,$serverPin).GetAwaiter().GetResult() | ConvertFrom-Json;break}catch{Start-Sleep -Seconds 1}
     }
     if(-not $heartbeat -or -not $heartbeat.agentHealthy){throw 'Service Running but authenticated heartbeat did not become healthy.'}
-    [pscustomobject]@{Service='SSC.Agent';Identity=(Get-CimInstance Win32_Service -Filter "Name='SSC.Agent'").StartName;StartupSeconds=$timer.Elapsed.TotalSeconds;AuthenticatedHeartbeat=$true;ObservedAt=$heartbeat.observedAt} |
+    $journal=Join-Path $root ('Agent\logs\startup-'+[DateTime]::UtcNow.ToString('yyyyMMdd')+'.jsonl')
+    $entries=@(Get-Content $journal | ForEach-Object {$_ | ConvertFrom-Json})
+    $scm=@($entries | Where-Object Stage -eq 'ScmConnected')[0]
+    $import=@($entries | Where-Object Stage -eq 'PfxImportBegin')[0]
+    if(-not $scm -or -not $import -or $scm.ElapsedMs -gt $import.ElapsedMs){throw 'Private key work happened before SCM connected.'}
+    $before=Get-FileHash "$root\Agent\service.json","$root\Agent\identity.pfx","$root\Secrets\agent-pfx.bin"
+    & "$PSScriptRoot\..\..\scripts\Update-SscService.ps1" -Role Agent -PublishDirectory $PublishDirectory -BackupDirectory "$artifacts\update-backup"
+    $after=Get-FileHash "$root\Agent\service.json","$root\Agent\identity.pfx","$root\Secrets\agent-pfx.bin"
+    if(Compare-Object $before.Hash $after.Hash){throw 'Updater changed production configuration/certificate/secret bytes.'}
+    $heartbeat=[SscFixtureHttp]::Get($clientCert,$serverPin).GetAwaiter().GetResult() | ConvertFrom-Json
+    if(-not $heartbeat.agentHealthy){throw 'Updated service lost authenticated heartbeat.'}
+    [pscustomobject]@{ScmSeconds=$scmSeconds;ScmBeforePrivateKeyImport=$true;UpdatePreservedSecrets=$true;Service='SSC.Agent';Identity=(Get-CimInstance Win32_Service -Filter "Name='SSC.Agent'").StartName;StartupSeconds=$timer.Elapsed.TotalSeconds;AuthenticatedHeartbeat=$true;ObservedAt=$heartbeat.observedAt} |
         ConvertTo-Json | Set-Content "$artifacts\result.json"
     Get-Content "$artifacts\result.json"
 } finally {

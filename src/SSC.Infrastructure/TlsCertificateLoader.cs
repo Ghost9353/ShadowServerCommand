@@ -14,18 +14,23 @@ public static class TlsCertificateLoader
         ? X509KeyStorageFlags.MachineKeySet : X509KeyStorageFlags.EphemeralKeySet;
 
     public static X509Certificate2 Load(string path, ISecretStore secrets, string secretName,
-        TlsCertificatePurpose purpose, ILogger? logger = null)
+        TlsCertificatePurpose purpose, ILogger? logger = null, Action<string>? checkpoint = null)
     {
         X509Certificate2? certificate = null;
         var stage = "DPAPI secret retrieval";
         try
         {
+            checkpoint?.Invoke("DpapiReadBegin");
             var password = secrets.Read(secretName);
+            checkpoint?.Invoke("DpapiReadComplete");
             stage = "PFX import";
+            checkpoint?.Invoke("PfxImportBegin");
             certificate = new X509Certificate2(path, password, StorageFlags);
+            checkpoint?.Invoke("PfxImportComplete");
             stage = "certificate/private-key validation";
             if (!certificate.HasPrivateKey) throw new CryptographicException("TLS certificate has no private key.");
             if (PeerRejection(certificate, purpose) is { } reason) throw new CryptographicException(reason);
+            checkpoint?.Invoke("SigningProbeBegin");
             var challenge = RandomNumberGenerator.GetBytes(32);
             string algorithm;
             int keySize;
@@ -47,6 +52,7 @@ public static class TlsCertificateLoader
                     algorithm = "ECDSA"; keySize = key.KeySize;
                 }
             }
+            checkpoint?.Invoke("SigningProbeComplete");
             logger?.LogInformation("TLS certificate ready: purpose={Purpose}, storage={StorageFlags}, sha256={CertificateSha256}, algorithm={Algorithm}, bits={KeySize}, expiresUtc={ExpiresUtc}, sanPresent={SanPresent}",
                 purpose, StorageFlags, certificate.GetCertHashString(HashAlgorithmName.SHA256), algorithm, keySize,
                 certificate.NotAfter.ToUniversalTime(), certificate.Extensions.Any(e => e.Oid?.Value == "2.5.29.17"));
