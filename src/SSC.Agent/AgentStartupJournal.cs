@@ -10,7 +10,7 @@ public sealed class AgentStartupJournal
     public void Write(string stage, Exception? error = null)
     {
         var record = JsonSerializer.Serialize(new { TimestampUtc=DateTimeOffset.UtcNow, Stage=stage,
-            ProcessId=Environment.ProcessId, ElapsedMs=_clock.ElapsedMilliseconds,
+            ProcessId=Environment.ProcessId, Account=OperatingSystem.IsWindows()?System.Security.Principal.WindowsIdentity.GetCurrent().Name:"non-Windows", ElapsedMs=_clock.ElapsedMilliseconds,
             Build=typeof(AgentStartupJournal).Module.ModuleVersionId,
             ErrorType=error?.GetType().Name, HResult=error is null ? null : $"0x{error.HResult:X8}" });
         try

@@ -18,13 +18,15 @@ try
     builder.Services.AddSingleton(options);
     builder.Services.AddSingleton<ISecretStore,MachineSecretStore>();
     builder.Services.AddSingleton<AgentCertificateOwner>();
+    builder.Services.AddHostedService<AgentCertificateInitializer>();
+    builder.Services.Configure<HostOptions>(o=>o.StartupTimeout=TimeSpan.FromSeconds(30));
     builder.Services.AddSingleton<WindowsHeartbeatCollector>();
-    // Kestrel options are materialized when its hosted service starts, after SCM connects.
-    // No DPAPI decryption, machine-key import or signing runs before the dispatcher handshake.
+    // WebApplication.Build materializes Kestrel options before SCM connects.
+    // Configure only a selector here: hosted initialization loads the key after SCM connects.
     builder.WebHost.ConfigureKestrel(k=>
     {
         var owner=k.ApplicationServices.GetRequiredService<AgentCertificateOwner>();
-        HeartbeatEndpoint.Configure(k,options,owner.GetCertificate(),k.ApplicationServices.GetRequiredService<ILogger<AgentCertificateOwner>>());
+        HeartbeatEndpoint.Configure(k,options,null,k.ApplicationServices.GetRequiredService<ILogger<AgentCertificateOwner>>(),()=>owner.Certificate);
     });
     journal.Write("HostBuildBegin");
     await using var app=builder.Build();

@@ -7,13 +7,15 @@ using SSC.Infrastructure;
 namespace SSC.Agent;
 public static class HeartbeatEndpoint
 {
-    public static void Configure(KestrelServerOptions kestrel,HeartbeatOptions options,X509Certificate2 certificate, ILogger? logger = null)
+    public static void Configure(KestrelServerOptions kestrel,HeartbeatOptions options,X509Certificate2? certificate, ILogger? logger = null, Func<X509Certificate2>? selector = null)
     {
         options.Validate();
         kestrel.AddServerHeader=false;kestrel.Limits.MaxRequestBodySize=1024;
         kestrel.Listen(IPAddress.Parse(options.BindAddress),options.Port,listen=>listen.UseHttps(https=>
         {
-            https.ServerCertificate=certificate;https.SslProtocols=SslProtocols.Tls12 | SslProtocols.Tls13;
+            https.ServerCertificate=certificate;
+            if(selector is not null)https.ServerCertificateSelector=(_,_)=>selector();
+            https.SslProtocols=SslProtocols.Tls12 | SslProtocols.Tls13;
             https.ClientCertificateMode=ClientCertificateMode.RequireCertificate;
             https.ClientCertificateValidation=(client,chain,errors)=>CertificatePins.ValidatePeer(client,options.TrustedClientSha256,TlsCertificatePurpose.Client,logger,chain,errors);
         }));
