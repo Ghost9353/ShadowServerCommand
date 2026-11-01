@@ -3,6 +3,7 @@
 [CmdletBinding()]
 param([Parameter(Mandatory)][string]$PublishDirectory)
 $ErrorActionPreference='Stop'
+. "$PSScriptRoot\..\..\scripts\Ssc-StartupJournal.ps1"
 if($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows'){throw 'Disposable Windows GitHub runner only. Never run this fixture on AM4 or AM5.'}
 if(Get-Service SSC.Agent -ErrorAction SilentlyContinue){throw 'SSC.Agent already exists; refusing to touch an existing installation.'}
 $root=Join-Path $env:ProgramData 'ShadowServerCommand'
@@ -11,7 +12,7 @@ if((Test-Path $root) -or (Test-Path $target)){throw 'Existing SSC data/binaries 
 $began=Get-Date
 $artifacts=Join-Path $env:GITHUB_WORKSPACE 'TestResults\service-startup'
 New-Item $artifacts -ItemType Directory -Force | Out-Null
-$agentCert=$null;$clientCert=$null
+$agentCert=$null;$clientCert=$null;$protectedOriginal=$null;$secretRestored=$false
 try {
     New-Item "$root\Agent" -ItemType Directory -Force | Out-Null
     New-Item "$root\Secrets" -ItemType Directory -Force | Out-Null
@@ -65,8 +66,8 @@ public static class SscFixtureHttp {
         try {$heartbeat=[SscFixtureHttp]::Get($clientCert,$serverPin).GetAwaiter().GetResult() | ConvertFrom-Json;break}catch{Start-Sleep -Seconds 1}
     }
     if(-not $heartbeat -or -not $heartbeat.agentHealthy){throw 'Service Running but authenticated heartbeat did not become healthy.'}
-    $journal=Join-Path $root ('Agent\logs\startup-'+[DateTime]::UtcNow.ToString('yyyyMMdd')+'.jsonl')
-    $entries=@(Get-Content $journal | ForEach-Object {$_ | ConvertFrom-Json})
+    $journalDirectory=Join-Path $root 'Agent\logs'
+    $entries=@(Get-SscStartupRecords -Directory $journalDirectory)
     $scm=@($entries | Where-Object Stage -eq 'ScmConnected')[0]
     $import=@($entries | Where-Object Stage -eq 'PfxImportBegin')[0]
     if(-not $scm -or -not $import -or $scm.Account -ne 'NT SERVICE\SSC.Agent' -or $scm.ElapsedMs -ge 5000 -or $scm.ElapsedMs -gt $import.ElapsedMs){throw 'Private key work happened before SCM connected.'}
@@ -84,16 +85,27 @@ public static class SscFixtureHttp {
     $bad=[Text.Encoding]::UTF8.GetBytes('intentionally-wrong-fixture-password')
     [IO.File]::WriteAllBytes("$root\Secrets\agent-pfx.bin",[Security.Cryptography.ProtectedData]::Protect($bad,$null,[Security.Cryptography.DataProtectionScope]::LocalMachine))
     [Array]::Clear($bad,0,$bad.Length)
+    $knownProcessKeys=@(Get-SscStartupRecords -Directory $journalDirectory | Where-Object Stage -eq 'ProcessEntry' | ForEach-Object ProcessKey)
     $failureStart=[DateTimeOffset]::UtcNow
+    Write-Host ("Failure test begins: utc={0}; knownProcesses={1}" -f $failureStart.ToString('O'),$knownProcessKeys.Count)
     & sc.exe start SSC.Agent | Out-Null
     $deadline=(Get-Date).AddSeconds(30);$failure=$null
     while((Get-Date) -lt $deadline){
-        $failure=@(Get-Content $journal | ForEach-Object {$_ | ConvertFrom-Json} | Where-Object { $_.Stage -eq 'StartupFailed' -and [DateTimeOffset]::Parse($_.TimestampUtc) -ge $failureStart })
+        $records=@(Get-SscStartupRecords -Directory $journalDirectory)
+        $failure=@(Find-SscFreshStartupFailure -Records $records -KnownProcessKeys $knownProcessKeys)
         if($failure.Count){break};Start-Sleep -Milliseconds 500
     }
-    if(-not $failure.Count){throw 'Bad password did not emit bounded startup failure diagnostics.'}
+    foreach($candidate in @($records | Where-Object Stage -eq 'StartupFailed')){
+        Write-Host ("Failure predicate: pid={0}; stage={1}; rawTimestamp={2}; inputType={3}; utc={4}; threshold={5}; afterThreshold={6}; file={7}; selected={8}" -f
+            $candidate.ProcessId,$candidate.Stage,$candidate.TimestampUtc,$candidate.TimestampUtc.GetType().FullName,
+            $candidate.UtcTimestamp.ToString('O'),$failureStart.ToString('O'),($candidate.UtcTimestamp -ge $failureStart),$candidate.SourceFile,
+            ($failure.ProcessKey -contains $candidate.ProcessKey))
+    }
+    if($failure.Count -ne 1){throw 'Bad password must emit exactly one StartupFailed for the fresh process; see predicate diagnostics.'}
+    if($failure[0].ErrorType -ne 'CryptographicException' -or $failure[0].HResult -ne '0x80070056'){throw 'Fresh process failed for an unexpected reason.'}
     (Get-Service SSC.Agent).WaitForStatus('Stopped',[TimeSpan]::FromSeconds(20))
     [IO.File]::WriteAllBytes("$root\Secrets\agent-pfx.bin",$protectedOriginal)
+    $secretRestored=$true
     Start-Service SSC.Agent
     $heartbeat=$null;$deadline=(Get-Date).AddSeconds(35)
     do {try{$heartbeat=[SscFixtureHttp]::Get($clientCert,$serverPin).GetAwaiter().GetResult() | ConvertFrom-Json;break}catch{Start-Sleep -Milliseconds 500}}while((Get-Date) -lt $deadline)
@@ -124,6 +136,13 @@ public static class SscFixtureHttp {
         ConvertTo-Json | Set-Content "$artifacts\result.json"
     Get-Content "$artifacts\result.json"
 } finally {
+    # Restore fixture credentials even when the assertion/polling fails. Never leave a bad
+    # secret behind for cleanup, retries or later phases of the disposable runner.
+    if($null -ne $protectedOriginal -and -not $secretRestored){
+        Stop-Service SSC.Agent -ErrorAction SilentlyContinue
+        [IO.File]::WriteAllBytes("$root\Secrets\agent-pfx.bin",$protectedOriginal)
+        Write-Host 'Original encrypted fixture secret restored in finally.'
+    }
     if(Test-Path "$root\Agent\logs"){Get-ChildItem "$root\Agent\logs\startup-*.jsonl" | ForEach-Object {Get-Content $_.FullName};Copy-Item "$root\Agent\logs" "$artifacts\logs" -Recurse -Force}
     Get-WinEvent -FilterHashtable @{LogName='System';Id=7000,7009;StartTime=$began} -ErrorAction SilentlyContinue |
         Select-Object TimeCreated,Id,Message | ConvertTo-Json | Set-Content "$artifacts\scm-events.json"

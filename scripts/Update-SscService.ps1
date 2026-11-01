@@ -4,6 +4,7 @@
 param([Parameter(Mandatory)][ValidateSet('Agent','Watchdog')][string]$Role,
       [Parameter(Mandatory)][string]$PublishDirectory,[string]$BackupDirectory,[switch]$LegacyRollback)
 $ErrorActionPreference='Stop'
+. "$PSScriptRoot\Ssc-StartupJournal.ps1"
 function Assert-Package([string]$Directory) {
     $manifestFile=Join-Path $Directory 'deployment-manifest.json'
     if(-not(Test-Path $manifestFile)){throw 'Missing deployment-manifest.json; use a complete corrected package or a verified rollback backup.'}
@@ -61,12 +62,9 @@ try {
             while([DateTimeOffset]::UtcNow -lt $deadline){
                 $current=Get-CimInstance Win32_Service -Filter "Name='$name'"
                 if($current.State -ne 'Running'){throw 'Agent exited during initialization; inspect startup journal.'}
-                $journal=Join-Path $env:ProgramData ('ShadowServerCommand\Agent\logs\startup-'+[DateTime]::UtcNow.ToString('yyyyMMdd')+'.jsonl')
-                if(Test-Path $journal){
-                    foreach($line in (Get-Content $journal -Tail 50)){
-                        $entry=$line | ConvertFrom-Json
-                        if($entry.Stage -eq 'HttpsReady' -and $entry.ProcessId -eq $current.ProcessId -and [DateTimeOffset]::Parse($entry.TimestampUtc) -ge $started){$ready=$true;break}
-                    }
+                $journalDirectory=Join-Path $env:ProgramData 'ShadowServerCommand\Agent\logs'
+                foreach($entry in @(Get-SscStartupRecords -Directory $journalDirectory)){
+                    if($entry.Stage -eq 'HttpsReady' -and $entry.ProcessId -eq $current.ProcessId -and $entry.UtcTimestamp -ge $started){$ready=$true;break}
                 }
                 if($ready){break};Start-Sleep -Milliseconds 500
             }

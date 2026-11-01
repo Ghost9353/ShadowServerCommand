@@ -17,6 +17,12 @@ jobs:
             [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors) | Out-Null
             if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
           }
+      - name: Journal regression tests (PowerShell 7)
+        shell: pwsh
+        run: ./tests/Windows/StartupJournal.Tests.ps1
+      - name: Journal regression tests (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tests/Windows/StartupJournal.Tests.ps1
       - name: Build and test
         shell: pwsh
         run: ./scripts/verify.ps1

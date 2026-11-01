@@ -2,6 +2,7 @@
 [CmdletBinding()]
 param([ValidateRange(15,600)][int]$TimeoutSeconds=120)
 $ErrorActionPreference='Stop'
+. "$PSScriptRoot\Ssc-StartupJournal.ps1"
 $start=[DateTimeOffset]::UtcNow
 $deadline=$start.AddSeconds($TimeoutSeconds)
 $path=Join-Path $env:ProgramData 'ShadowServerCommand\Status\watchdog.json'
@@ -10,9 +11,9 @@ while([DateTimeOffset]::UtcNow -lt $deadline){
     if($service.Status -ne 'Running'){throw 'SSC.Watchdog is not running; check its startup/TLS credential logs.'}
     if(Test-Path $path){
         try {
-            $snapshot=Get-Content $path -Raw | ConvertFrom-Json
-            $written=[DateTimeOffset]::Parse($snapshot.WrittenAt)
-            $heartbeat=if($snapshot.State.LastHeartbeat){[DateTimeOffset]::Parse($snapshot.State.LastHeartbeat)}else{$null}
+            $snapshot=ConvertFrom-SscJson (Get-Content $path -Raw)
+            $written=(ConvertTo-SscUtcInstant $snapshot.WrittenAt)
+            $heartbeat=if($snapshot.State.LastHeartbeat){(ConvertTo-SscUtcInstant $snapshot.State.LastHeartbeat)}else{$null}
             $online=($snapshot.State.Computer -eq 1 -or $snapshot.State.Computer -eq 'Online')
             if($snapshot.ServiceHealth -eq 'RUNNING' -and $written -ge $start -and $heartbeat -and
                $heartbeat -ge $start -and $online -and $snapshot.State.Failures -eq 0 -and $snapshot.State.Successes -ge 3){
