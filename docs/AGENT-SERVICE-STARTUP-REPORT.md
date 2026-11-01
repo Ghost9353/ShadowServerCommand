@@ -52,3 +52,7 @@ Follow [AGENT-SERVICE-STARTUP-REPAIR.md](AGENT-SERVICE-STARTUP-REPAIR.md) for ex
 The cloud environment has no remote execution/VPN access to AM4 or AM5. Their actual binaries, security tooling, key provider/container ACLs and startup traces cannot be inspected here. The precise original AM4 blocking operation therefore remains unconfirmed. The corrected package removes the newly added pre-dispatcher native-work exposure and provides the diagnostics needed if an AM4-specific failure persists.
 
 Acceptance on the actual PCs remains pending: AM4 updater succeeds under its existing virtual identity, HttpsReady is fresh for its new PID, and AM5 reports fresh authenticated LastHeartbeat, zero failures and three successful checks. Inspect recovery evidence/Discord as documented. A real SCM/virtual-account test passed in CI; that is stronger than the prior console-only TLS tests, but is not a claim that AM4 has already been updated successfully.
+
+## Subsequent CI polling correction
+
+A later run exposed an intermittent PowerShell timestamp-filter defect in the wrong-password fixture even though StartupFailed was present. See [CI-JOURNAL-FILTER-REPAIR.md](CI-JOURNAL-FILTER-REPAIR.md) for the confirmed subsecond-loss cause, corrected scripts, and full green run. Agent/Watchdog binaries are unchanged; r2 includes the corrected shared polling helper and scripts.

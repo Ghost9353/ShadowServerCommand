@@ -16,9 +16,11 @@ Independent `startup-*.jsonl` records are written immediately at process entry, 
 
 ## Corrected package
 
-Download `SSC-MC-agent-service-startup-repair-win-x64.zip` and extract it on AM4 to `C:\SSC-Agent-Startup-Repair`.
+Download the corrected-script package `SSC-MC-agent-service-startup-repair-r2-win-x64.zip` and extract it on AM4 to `C:\SSC-Agent-Startup-Repair`.
 
 The package contains the corrected Agent, the compatible existing TLS-repaired Watchdog, scripts and runbooks. **AM4 only needs the Agent update.** Do not update the functioning AM5 Watchdog unnecessarily. Its package is included if AM5 still needs the earlier TLS key-storage repair.
+
+Keep the scripts folder together: the updater and heartbeat verifier depend on `Ssc-StartupJournal.ps1`. The r2 package fixes PowerShell timestamp/polling precision without changing service binaries or production credentials.
 
 Every publish directory includes `deployment-manifest.json` with hashes of its complete file set. The updater verifies source role/required files/hashes before stopping anything, backs up the entire existing installation, creates a verified rollback manifest even for old installations, verifies copied hashes, and waits for a fresh **HttpsReady** event from the actual new service PID. It preserves ProgramData config, encrypted secrets, PFX files, database/history/outbox, service identity/start mode and firewall settings. Failed deployment/startup restores previous binaries and attempts to restart a previously running service. It reports the failure even after successful rollback; it never reports the patch as successful merely because SCM said Running.
 
