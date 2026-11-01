@@ -1,5 +1,18 @@
 # Shadow Server Command — Minecraft Edition
 
+
+## Current Agent service-startup repair
+
+**[Download the corrected Windows x64 package](https://github.com/Ghost9353/ShadowServerCommand/raw/refs/heads/main/downloads/SSC-MC-agent-service-startup-repair-win-x64.zip)**
+
+- [AM4 update, AM5 live verification and rollback](docs/AGENT-SERVICE-STARTUP-REPAIR.md)
+- [Audit, limitations and real Windows service regression evidence](docs/AGENT-SERVICE-STARTUP-REPORT.md)
+- [Current source ZIP](https://github.com/Ghost9353/ShadowServerCommand/raw/refs/heads/main/downloads/SSC-MC-agent-service-startup-repair-source.zip)
+
+This supersedes the earlier TLS package for the Agent. The corrected Agent is tested through SCM under `NT SERVICE\SSC.Agent`, including authenticated heartbeat, verified updates, diagnostic failure/recovery, tamper rejection and automatic rollback. Update AM4; leave a functioning repaired AM5 Watchdog alone. Production certificates, pins, secrets and configuration are preserved; Minecraft is never restarted. Actual AM4/AM5 acceptance still requires the live verification commands.
+
+Earlier packages below are retained for history/rollback, not the recommended Agent update.
+
 ## TLS heartbeat repair — existing AM4/AM5 installations
 
 **[Download the repaired Agent + Watchdog Windows x64 package](https://github.com/Ghost9353/ShadowServerCommand/raw/refs/heads/main/downloads/SSC-MC-tls-heartbeat-repair-win-x64.zip)**

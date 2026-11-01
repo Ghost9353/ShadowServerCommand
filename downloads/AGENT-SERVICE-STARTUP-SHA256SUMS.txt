@@ -1,0 +1,2 @@
+b3f3c11a4e03451044fdb9b04a29d228ee131d341d62b0384876252e61ea57c5  SSC-MC-agent-service-startup-repair-source.zip
+f5fe812d1cf376e6507fbd5e2a1df379726b7fc5351ec4dec4d4de1d4b386d4b  SSC-MC-agent-service-startup-repair-win-x64.zip
