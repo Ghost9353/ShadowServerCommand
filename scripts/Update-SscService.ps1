@@ -2,7 +2,7 @@
 #Requires -RunAsAdministrator
 [CmdletBinding(SupportsShouldProcess=$true,ConfirmImpact='Medium')]
 param([Parameter(Mandatory)][ValidateSet('Agent','Watchdog')][string]$Role,
-      [Parameter(Mandatory)][string]$PublishDirectory,[string]$BackupDirectory)
+      [Parameter(Mandatory)][string]$PublishDirectory,[string]$BackupDirectory,[switch]$LegacyRollback)
 $ErrorActionPreference='Stop'
 function Assert-Package([string]$Directory) {
     $manifestFile=Join-Path $Directory 'deployment-manifest.json'
@@ -22,6 +22,7 @@ function Assert-Package([string]$Directory) {
 $name="SSC.$Role";$target=Join-Path $env:ProgramFiles "ShadowServerCommand\$Role"
 $source=(Resolve-Path $PublishDirectory).Path.TrimEnd('\')
 if($source -eq $target.TrimEnd('\')){throw 'Publish source must differ from the running installation.'}
+if($LegacyRollback -and (Split-Path $source -Leaf) -ne 'previous-binaries'){throw 'LegacyRollback is restricted to an explicit previous-binaries backup.'}
 $manifest=Assert-Package $source # Before stopping anything.
 $service=Get-Service $name -ErrorAction Stop
 $installed=Get-CimInstance Win32_Service -Filter "Name='$name'"
@@ -55,7 +56,7 @@ try {
     $started=[DateTimeOffset]::UtcNow
     if($wasRunning){
         Start-Service $name;(Get-Service $name).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
-        if($Role -eq 'Agent'){
+        if($Role -eq 'Agent' -and -not $LegacyRollback){
             $ready=$false;$deadline=[DateTimeOffset]::UtcNow.AddSeconds(35)
             while([DateTimeOffset]::UtcNow -lt $deadline){
                 $current=Get-CimInstance Win32_Service -Filter "Name='$name'"
@@ -72,6 +73,7 @@ try {
             if(-not $ready){throw 'Agent did not reach HTTPS readiness. Inspect startup journal; SCM Running alone is insufficient.'}
         }
     }
+    if($LegacyRollback){Write-Warning 'Legacy rollback: SCM Running verified; this original build has no new HTTPS-ready journal. Verify its listener/status manually.'}
     Write-Host "$name package hashes and startup verified. Backup: $binaryBackup"
     Write-Host 'Configuration, PFX files, encrypted secrets, history and SCM registration are unchanged. Run AM5 heartbeat verification for end-to-end authentication.'
 } catch {

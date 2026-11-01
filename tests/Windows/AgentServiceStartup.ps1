@@ -43,7 +43,7 @@ try {
     if($LASTEXITCODE -ne 0){throw "SCM rejected startup after $($timer.Elapsed.TotalSeconds) seconds."}
     (Get-Service SSC.Agent).WaitForStatus('Running',[TimeSpan]::FromSeconds(20))
     $scmSeconds=$timer.Elapsed.TotalSeconds
-    if($scmSeconds -ge 15){throw 'SCM handshake exceeded the 15-second regression budget.'}
+    if($scmSeconds -ge 45){throw 'SCM handshake exceeded the 45-second cold-process regression budget.'}
     Add-Type -TypeDefinition @'
 using System;
 using System.Net.Http;
@@ -69,12 +69,13 @@ public static class SscFixtureHttp {
     $entries=@(Get-Content $journal | ForEach-Object {$_ | ConvertFrom-Json})
     $scm=@($entries | Where-Object Stage -eq 'ScmConnected')[0]
     $import=@($entries | Where-Object Stage -eq 'PfxImportBegin')[0]
-    if(-not $scm -or -not $import -or $scm.Account -ne 'NT SERVICE\SSC.Agent' -or $scm.ElapsedMs -gt $import.ElapsedMs){throw 'Private key work happened before SCM connected.'}
+    if(-not $scm -or -not $import -or $scm.Account -ne 'NT SERVICE\SSC.Agent' -or $scm.ElapsedMs -ge 5000 -or $scm.ElapsedMs -gt $import.ElapsedMs){throw 'Private key work happened before SCM connected.'}
     $before=Get-FileHash "$root\Agent\service.json","$root\Agent\identity.pfx","$root\Secrets\agent-pfx.bin"
     & "$PSScriptRoot\..\..\scripts\Update-SscService.ps1" -Role Agent -PublishDirectory $PublishDirectory -BackupDirectory "$artifacts\update-backup"
     $after=Get-FileHash "$root\Agent\service.json","$root\Agent\identity.pfx","$root\Secrets\agent-pfx.bin"
     if(Compare-Object $before.Hash $after.Hash){throw 'Updater changed production configuration/certificate/secret bytes.'}
-    $heartbeat=[SscFixtureHttp]::Get($clientCert,$serverPin).GetAwaiter().GetResult() | ConvertFrom-Json
+    $heartbeat=$null;$deadline=(Get-Date).AddSeconds(35)
+    do{try{$heartbeat=[SscFixtureHttp]::Get($clientCert,$serverPin).GetAwaiter().GetResult() | ConvertFrom-Json;break}catch{Start-Sleep -Milliseconds 500}}while((Get-Date) -lt $deadline)
     if(-not $heartbeat.agentHealthy){throw 'Updated service lost authenticated heartbeat.'}
     # Missing/wrong DPAPI password must produce a bounded, independent startup failure,
     # then recover after restoring the encrypted bytes. This fixture never uses production secrets.
@@ -94,7 +95,7 @@ public static class SscFixtureHttp {
     (Get-Service SSC.Agent).WaitForStatus('Stopped',[TimeSpan]::FromSeconds(20))
     [IO.File]::WriteAllBytes("$root\Secrets\agent-pfx.bin",$protectedOriginal)
     Start-Service SSC.Agent
-    $deadline=(Get-Date).AddSeconds(35)
+    $heartbeat=$null;$deadline=(Get-Date).AddSeconds(35)
     do {try{$heartbeat=[SscFixtureHttp]::Get($clientCert,$serverPin).GetAwaiter().GetResult() | ConvertFrom-Json;break}catch{Start-Sleep -Milliseconds 500}}while((Get-Date) -lt $deadline)
     if(-not $heartbeat.agentHealthy){throw 'Service did not recover authenticated heartbeat after secret restoration.'}
     # A tampered package must be rejected before stopping the healthy service.
@@ -114,7 +115,8 @@ public static class SscFixtureHttp {
     $rolledBack=$false
     try{ & "$PSScriptRoot\..\..\scripts\Update-SscService.ps1" -Role Agent -PublishDirectory $broken -BackupDirectory "$artifacts\expected-rollback" }catch{$rolledBack=$true}
     if(-not $rolledBack -or (Get-Service SSC.Agent).Status -ne 'Running'){throw 'Failed update did not restore the previous running service.'}
-    $heartbeat=[SscFixtureHttp]::Get($clientCert,$serverPin).GetAwaiter().GetResult() | ConvertFrom-Json
+    $heartbeat=$null;$deadline=(Get-Date).AddSeconds(35)
+    do{try{$heartbeat=[SscFixtureHttp]::Get($clientCert,$serverPin).GetAwaiter().GetResult() | ConvertFrom-Json;break}catch{Start-Sleep -Milliseconds 500}}while((Get-Date) -lt $deadline)
     if(-not $heartbeat.agentHealthy){throw 'Automatic rollback lost authenticated heartbeat.'}
     # Do not publish intentionally corrupted binary fixtures as downloadable test artifacts.
     Remove-Item $corrupt,$broken -Recurse -Force

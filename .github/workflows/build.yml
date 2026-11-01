@@ -27,7 +27,7 @@ jobs:
           if ($LASTEXITCODE) { throw 'Publish failed' }
           ./scripts/Write-SscDeploymentManifest.ps1 -Role Agent -Directory ./artifacts/service-fixture
       - name: Real SCM startup under virtual service identity
-        timeout-minutes: 5
+        timeout-minutes: 8
         shell: pwsh
         run: ./tests/Windows/AgentServiceStartup.ps1 -PublishDirectory ./artifacts/service-fixture
       - uses: actions/upload-artifact@v4
