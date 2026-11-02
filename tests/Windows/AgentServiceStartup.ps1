@@ -121,6 +121,9 @@ public static class SscFixtureHttp {
         try {$heartbeat=[SscFixtureHttp]::Get($clientCert,$serverPin).GetAwaiter().GetResult() | ConvertFrom-Json;break}catch{Start-Sleep -Seconds 1}
     }
     if(-not $heartbeat -or -not $heartbeat.agentHealthy){throw 'Service Running but authenticated heartbeat did not become healthy.'}
+    $beforeIdempotent=(Get-CimInstance Win32_Service -Filter "Name='SSC.Agent'").ProcessId
+    & powershell.exe -NoProfile -NonInteractive -File "$PSScriptRoot\..\..\scripts\Prepare-SscAgentTls.ps1" -AgentPublishDirectory $PublishDirectory -ExpectedServerSha256 $serverPin
+    if($LASTEXITCODE -ne 0 -or (Get-CimInstance Win32_Service -Filter "Name='SSC.Agent'").ProcessId -ne $beforeIdempotent){throw 'Windows PowerShell 5.1 idempotent preparation failed or disturbed the running service.'}
     $journalDirectory=Join-Path $root 'Agent\logs'
     $entries=@(Get-SscStartupRecords -Directory $journalDirectory)
     $scm=@($entries | Where-Object Stage -eq 'ScmConnected')[0]

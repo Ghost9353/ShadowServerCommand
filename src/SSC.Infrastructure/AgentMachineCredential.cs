@@ -91,7 +91,7 @@ public static class AgentMachineCredential
     public static (string Provider,string Path) KeyFile(X509Certificate2 certificate)
     {
         using var rsa=certificate.GetRSAPrivateKey();
-        Console.Error.WriteLine(JsonSerializer.Serialize(new { Diagnostic="CredentialProviderInspection", RsaType=rsa?.GetType().Name,
+        Console.WriteLine(JsonSerializer.Serialize(new { Diagnostic="CredentialProviderInspection", RsaType=rsa?.GetType().Name,
             CngProvider=(rsa as RSACng)?.Key.Provider?.Provider, CngMachine=(rsa as RSACng)?.Key.IsMachineKey,
             CspProvider=(rsa as RSACryptoServiceProvider)?.CspKeyContainerInfo.ProviderName,
             CspMachine=(rsa as RSACryptoServiceProvider)?.CspKeyContainerInfo.MachineKeyStore }));
