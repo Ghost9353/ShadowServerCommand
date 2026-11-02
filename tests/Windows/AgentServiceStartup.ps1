@@ -66,8 +66,10 @@ public static class SscFixtureHttp {
     if($LASTEXITCODE -ne 0){throw 'Administrator credential preparation failed.'}
     $storeCert=Get-ChildItem Cert:\LocalMachine\My | Where-Object {$_.GetCertHashString([Security.Cryptography.HashAlgorithmName]::SHA256) -eq $serverPin} | Select-Object -First 1
     $rsa=[Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($storeCert)
-    if($rsa -is [Security.Cryptography.RSACng]){$keyFile=Join-Path $env:ProgramData ('Microsoft\Crypto\Keys\'+$rsa.Key.UniqueName)}
-    else{$keyFile=Join-Path $env:ProgramData ('Microsoft\Crypto\RSA\MachineKeys\'+$rsa.CspKeyContainerInfo.UniqueKeyContainerName)}
+    if($rsa -is [Security.Cryptography.RSACng]){
+        $folder=if($rsa.Key.Provider.Provider -eq 'Microsoft Software Key Storage Provider'){'Microsoft\Crypto\Keys\'}else{'Microsoft\Crypto\RSA\MachineKeys\'}
+        $keyFile=Join-Path $env:ProgramData ($folder+$rsa.Key.UniqueName)
+    }else{$keyFile=Join-Path $env:ProgramData ('Microsoft\Crypto\RSA\MachineKeys\'+$rsa.CspKeyContainerInfo.UniqueKeyContainerName)}
     $rsa.Dispose()
     # Mimic AM4's read-only machine-key directories for this exact test identity.
     # Never replace a global ACL or grant broader rights; restore both in finally.
@@ -90,7 +92,9 @@ public static class SscFixtureHttp {
         }
         $records=@(Get-SscStartupRecords "$root\Agent\logs")
         $failures=@(Find-SscFreshStartupFailure -Records $records -KnownProcessKeys $known)
-        $comparison=[pscustomobject]@{Provider=$Provider;Mode=$mode;AuthenticatedHttps=$healthy;FailureHResult=if($failures.Count){$failures[0].HResult}else{$null}}
+        $freshStarts=@($records|Where-Object {$_.Stage -eq 'ProcessEntry' -and $known -notcontains $_.ProcessKey})
+        $modeRecords=@($records|Where-Object {$freshStarts.ProcessId -contains $_.ProcessId})
+        $comparison=[pscustomobject]@{Provider=$Provider;Mode=$mode;AuthenticatedHttps=$healthy;ImportSucceeded=[bool]@($modeRecords|Where-Object {$_.Stage -in @('PfxImportComplete','EphemeralImportComplete')}).Count;SigningSucceeded=[bool]@($modeRecords|Where-Object Stage -eq 'SigningProbeComplete').Count;FailureHResult=if($failures.Count){$failures[0].HResult}else{$null}}
         $comparisons+=$comparison;$comparison|ConvertTo-Json -Compress|Write-Host
         if($mode -eq 'Machine' -and ($healthy -or $failures.Count -ne 1)){throw 'Restricted machine-key import was not reproduced as a service failure.'}
         Stop-Service SSC.Agent -ErrorAction SilentlyContinue

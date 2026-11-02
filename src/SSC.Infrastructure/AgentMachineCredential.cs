@@ -94,8 +94,17 @@ public static class AgentMachineCredential
             CngProvider=(rsa as RSACng)?.Key.Provider?.Provider, CngMachine=(rsa as RSACng)?.Key.IsMachineKey,
             CspProvider=(rsa as RSACryptoServiceProvider)?.CspKeyContainerInfo.ProviderName,
             CspMachine=(rsa as RSACryptoServiceProvider)?.CspKeyContainerInfo.MachineKeyStore }));
-        if(rsa is RSACng cng && cng.Key.IsMachineKey && cng.Key.Provider==CngProvider.MicrosoftSoftwareKeyStorageProvider)
-            return("CNG",Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),"Microsoft","Crypto","Keys",cng.Key.UniqueName!));
+        if(rsa is RSACng cng && cng.Key.IsMachineKey)
+        {
+            var unique=cng.Key.UniqueName ?? throw new CryptographicException("Machine key has no unique name.");
+            if(Path.GetFileName(unique)!=unique)throw new CryptographicException("Unexpected private-key file name.");
+            var provider=cng.Key.Provider?.Provider;
+            if(provider==CngProvider.MicrosoftSoftwareKeyStorageProvider.Provider)
+                return("CNG",Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),"Microsoft","Crypto","Keys",unique));
+            // NCrypt can wrap a legacy Microsoft CSP: RSACng is not proof of CNG file storage.
+            if(provider is "Microsoft Enhanced RSA and AES Cryptographic Provider" or "Microsoft Enhanced Cryptographic Provider v1.0" or "Microsoft Strong Cryptographic Provider")
+                return("CAPI",Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),"Microsoft","Crypto","RSA","MachineKeys",unique));
+        }
         if(rsa is RSACryptoServiceProvider csp && csp.CspKeyContainerInfo.MachineKeyStore)
             return("CAPI",Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),"Microsoft","Crypto","RSA","MachineKeys",csp.CspKeyContainerInfo.UniqueKeyContainerName));
         throw new CryptographicException("Unsupported/hardware key provider; configure provider-specific key permissions explicitly.");
