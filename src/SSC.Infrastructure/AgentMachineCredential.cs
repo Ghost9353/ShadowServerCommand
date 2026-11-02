@@ -56,6 +56,11 @@ public static class AgentMachineCredential
         using var expected=new X509Certificate2(options.CertificatePath,password,X509KeyStorageFlags.EphemeralKeySet);
         if(TlsCertificateLoader.PeerRejection(expected,TlsCertificatePurpose.Server) is { } rejection)throw new CryptographicException(rejection);
         var pin=expected.GetCertHashString(HashAlgorithmName.SHA256);
+        if(File.Exists(ReferencePath))
+        {
+            var previous=JsonSerializer.Deserialize<AgentCredentialReference>(File.ReadAllText(ReferencePath));
+            if(previous?.CertificateSha256!=pin)throw new CryptographicException("Preparation refuses an identity change; coordinate any separate rotation explicitly.");
+        }
         var certificate=Find(pin);var created=certificate is null;
         certificate ??= new X509Certificate2(options.CertificatePath,password,X509KeyStorageFlags.MachineKeySet|X509KeyStorageFlags.PersistKeySet);
         using(certificate)
@@ -82,6 +87,10 @@ public static class AgentMachineCredential
     public static (string Provider,string Path) KeyFile(X509Certificate2 certificate)
     {
         using var rsa=certificate.GetRSAPrivateKey();
+        Console.Error.WriteLine(JsonSerializer.Serialize(new { Diagnostic="CredentialProviderInspection", RsaType=rsa?.GetType().Name,
+            CngProvider=(rsa as RSACng)?.Key.Provider.Provider, CngMachine=(rsa as RSACng)?.Key.IsMachineKey,
+            CspProvider=(rsa as RSACryptoServiceProvider)?.CspKeyContainerInfo.ProviderName,
+            CspMachine=(rsa as RSACryptoServiceProvider)?.CspKeyContainerInfo.MachineKeyStore }));
         if(rsa is RSACng cng && cng.Key.IsMachineKey && cng.Key.Provider==CngProvider.MicrosoftSoftwareKeyStorageProvider)
             return("CNG",Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),"Microsoft","Crypto","Keys",cng.Key.UniqueName!));
         if(rsa is RSACryptoServiceProvider csp && csp.CspKeyContainerInfo.MachineKeyStore)

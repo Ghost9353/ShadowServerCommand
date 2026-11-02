@@ -17,6 +17,7 @@ $creation=if($Provider -eq 'CNG'){@{Provider='Microsoft Software Key Storage Pro
 try {
     New-Item "$root\Agent" -ItemType Directory -Force | Out-Null
     New-Item "$root\Secrets" -ItemType Directory -Force | Out-Null
+    Set-Content "$root\fixture-only.marker" 'Disposable runner fixture only'
     New-Item $target -ItemType Directory -Force | Out-Null
     Copy-Item (Join-Path $PublishDirectory '*') $target -Recurse -Force
     $agentCert=New-SelfSignedCertificate @creation -Subject 'CN=SSC.ServiceFixture' -CertStoreLocation Cert:\LocalMachine\My -KeyAlgorithm RSA -KeyLength 3072 -KeyExportPolicy Exportable -KeyUsage DigitalSignature,KeyEncipherment -Type Custom -TextExtension '2.5.29.37={text}1.3.6.1.5.5.7.3.1' -NotAfter (Get-Date).AddDays(1)

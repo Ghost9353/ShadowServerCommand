@@ -2,7 +2,7 @@ using System.Security.Cryptography.X509Certificates;
 using Microsoft.Extensions.Hosting.WindowsServices;
 using SSC.Agent;
 using SSC.Infrastructure;
-if(Environment.GetEnvironmentVariable("GITHUB_ACTIONS")!="true" || !OperatingSystem.IsWindows())return 2;
+if(!OperatingSystem.IsWindows() || !File.Exists(Path.Combine(ServicePaths.Root,"fixture-only.marker")))return 2;
 var journal=new AgentStartupJournal();journal.Write("ProcessEntry");
 X509Certificate2? certificate=null;
 try
