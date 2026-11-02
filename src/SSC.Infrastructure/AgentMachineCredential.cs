@@ -46,7 +46,7 @@ public static class AgentMachineCredential
         }
         return selected;
     }
-    public static AgentCredentialPreparation Prepare(HeartbeatOptions options,ISecretStore secrets)
+    public static AgentCredentialPreparation Prepare(HeartbeatOptions options,ISecretStore secrets,string expectedServerSha256)
     {
         if(!OperatingSystem.IsWindows())throw new PlatformNotSupportedException();
         using var identity=WindowsIdentity.GetCurrent();
@@ -56,6 +56,7 @@ public static class AgentMachineCredential
         using var expected=new X509Certificate2(options.CertificatePath,password,X509KeyStorageFlags.EphemeralKeySet);
         if(TlsCertificateLoader.PeerRejection(expected,TlsCertificatePurpose.Server) is { } rejection)throw new CryptographicException(rejection);
         var pin=expected.GetCertHashString(HashAlgorithmName.SHA256);
+        if(!CertificatePins.Matches(expected,expectedServerSha256))throw new CryptographicException("Existing PFX does not match the expected public server pin. No credential is prepared.");
         if(File.Exists(ReferencePath))
         {
             var previous=JsonSerializer.Deserialize<AgentCredentialReference>(File.ReadAllText(ReferencePath));

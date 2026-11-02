@@ -62,7 +62,10 @@ public static class SscFixtureHttp {
  }
 }
 '@
-    & "$PSScriptRoot\..\..\scripts\Prepare-SscAgentTls.ps1" -AgentPublishDirectory $PublishDirectory
+    # A wrong public pin must fail before any reference/store binding is established.
+    & "$target\SSC.Agent.exe" --prepare-tls ("--expected-server-pin="+('0'*64)) | Out-Null
+    if($LASTEXITCODE -eq 0 -or (Test-Path "$root\Credentials\Agent\identity.json")){throw 'Preparation accepted the wrong expected identity.'}
+    & "$PSScriptRoot\..\..\scripts\Prepare-SscAgentTls.ps1" -AgentPublishDirectory $PublishDirectory -ExpectedServerSha256 $serverPin
     if($LASTEXITCODE -ne 0){throw 'Administrator credential preparation failed.'}
     $storeCert=Get-ChildItem Cert:\LocalMachine\My | Where-Object {$_.GetCertHashString([Security.Cryptography.HashAlgorithmName]::SHA256) -eq $serverPin} | Select-Object -First 1
     $rsa=[Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($storeCert)
@@ -71,6 +74,10 @@ public static class SscFixtureHttp {
         $keyFile=Join-Path $env:ProgramData ($folder+$rsa.Key.UniqueName)
     }else{$keyFile=Join-Path $env:ProgramData ('Microsoft\Crypto\RSA\MachineKeys\'+$rsa.CspKeyContainerInfo.UniqueKeyContainerName)}
     $rsa.Dispose()
+    foreach($protectedFile in @($keyFile,"$root\Credentials\Agent\identity.json")){
+        $direct=@((Get-Acl $protectedFile).Access | Where-Object {$_.IdentityReference.Value -eq 'NT SERVICE\SSC.Agent' -and $_.AccessControlType -eq 'Allow'})
+        if(-not $direct.Count -or @($direct | Where-Object {($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Write) -ne 0}).Count){throw 'Service received write rights to the prepared private key or reference.'}
+    }
     # Mimic AM4's read-only machine-key directories for this exact test identity.
     # Never replace a global ACL or grant broader rights; restore both in finally.
     foreach($directory in @("$env:ProgramData\Microsoft\Crypto\Keys","$env:ProgramData\Microsoft\Crypto\RSA\MachineKeys")){
@@ -134,7 +141,7 @@ public static class SscFixtureHttp {
     [IO.File]::WriteAllBytes("$root\Secrets\agent-pfx.bin",[Security.Cryptography.ProtectedData]::Protect($bad,$null,[Security.Cryptography.DataProtectionScope]::LocalMachine))
     [Array]::Clear($bad,0,$bad.Length)
     try {
-        & "$target\SSC.Agent.exe" --prepare-tls | Out-Null
+        & "$target\SSC.Agent.exe" --prepare-tls "--expected-server-pin=$serverPin" | Out-Null
         if($LASTEXITCODE -eq 0){throw 'Wrong password incorrectly accepted during preparation.'}
         if((Get-CimInstance Win32_Service -Filter "Name='SSC.Agent'").ProcessId -ne $beforePreflightPid){throw 'Preparation disturbed the running Agent.'}
     } finally {[IO.File]::WriteAllBytes("$root\Secrets\agent-pfx.bin",$protectedOriginal);$secretRestored=$true}

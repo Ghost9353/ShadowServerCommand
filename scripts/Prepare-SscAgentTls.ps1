@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 #Requires -RunAsAdministrator
 [CmdletBinding(SupportsShouldProcess=$true)]
-param([Parameter(Mandatory)][string]$AgentPublishDirectory)
+param([Parameter(Mandatory)][string]$AgentPublishDirectory,[Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedServerSha256)
 $ErrorActionPreference='Stop'
 # Never starts/stops the service. Existing config, PFX and DPAPI bytes remain unchanged.
 $service=Get-CimInstance Win32_Service -Filter "Name='SSC.Agent'"
@@ -15,5 +15,5 @@ foreach($file in $manifest.Files){
     if(-not $full.StartsWith($directory.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase) -or (Get-FileHash $full -Algorithm SHA256).Hash -ne $file.Sha256){throw 'Preparation package integrity failed; service untouched.'}
 }
 $exe=Join-Path $directory 'SSC.Agent.exe' 
-& $exe --prepare-tls
+& $exe --prepare-tls "--expected-server-pin=$ExpectedServerSha256"
 if($LASTEXITCODE -ne 0){throw 'Preparation failed. Existing Agent has not been stopped or updated. Inspect safe startup diagnostics.'}
