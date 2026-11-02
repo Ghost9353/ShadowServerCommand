@@ -3,6 +3,10 @@ on: [push, pull_request, workflow_dispatch]
 jobs:
   verify:
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: [CNG, CAPI]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -31,13 +35,16 @@ jobs:
         run: |
           dotnet publish src/SSC.Agent -c Release -r win-x64 --self-contained false -o artifacts/service-fixture
           if ($LASTEXITCODE) { throw 'Publish failed' }
-          ./scripts/Write-SscDeploymentManifest.ps1 -Role Agent -Directory ./artifacts/service-fixture
-      - name: Real SCM startup under virtual service identity
-        timeout-minutes: 8
+          ./scripts/Write-SscDeploymentManifest.ps1 -Role Agent -Directory ./artifacts/service-fixture -CredentialMode ProvisionedMachineStore
+      - name: Publish isolated TLS provider harness
         shell: pwsh
-        run: ./tests/Windows/AgentServiceStartup.ps1 -PublishDirectory ./artifacts/service-fixture
+        run: dotnet publish tests/SSC.TlsServiceHarness -c Release -r win-x64 --self-contained false -o artifacts/tls-harness
+      - name: Real SCM startup under virtual service identity
+        timeout-minutes: 12
+        shell: pwsh
+        run: ./tests/Windows/AgentServiceStartup.ps1 -PublishDirectory ./artifacts/service-fixture -HarnessDirectory ./artifacts/tls-harness -Provider ${{ matrix.provider }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: test-results
+          name: test-results-${{ matrix.provider }}
           path: TestResults
