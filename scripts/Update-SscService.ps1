@@ -104,10 +104,21 @@ try {
             }else{$rollback.VerificationLevel='Previous service intentionally stopped';$rollback.OperationalVerified=$false}
         }catch{
             $rollback.ErrorType=$_.Exception.GetType().Name
+            $rollback.ServiceRunning=(Get-Service $name -ErrorAction SilentlyContinue).Status -eq 'Running'
             Write-Warning 'Rollback files verified, but previous service operational recovery FAILED. Inspect rollback-result.json and startup logs.'
             throw
         }finally{$rollback | ConvertTo-Json | Set-Content (Join-Path $BackupDirectory 'rollback-result.json') -Encoding UTF8}
         Write-Warning ("Patch failed; previous binaries restored. Previous operational={0}; level={1}. AM5 authenticated heartbeats remain a separate check." -f $rollback.OperationalVerified,$rollback.VerificationLevel)
-    } elseif($wasRunning){try{Start-Service $name}catch{Write-Warning 'Service remains stopped; start the original installation manually.'}}
+    } elseif($wasRunning){
+        $recovery=[ordered]@{BinariesChanged=$false;ServiceRunning=$false;OperationalVerified=$false;AuthenticatedHeartbeatVerified=$false}
+        try {
+            $since=[DateTimeOffset]::UtcNow;Start-Service $name
+            (Get-Service $name).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
+            if($Role -eq 'Agent'){$operation=Wait-SscAgentOperation -Since $since -RequireJournal $previousReady;$recovery.ServiceRunning=$operation.ServiceRunning;$recovery.ListenerReachable=$operation.ListenerReachable;$recovery.HttpsJournalReady=$operation.HttpsJournalReady}
+            else{$recovery.ServiceRunning=$true}
+            $recovery.OperationalVerified=$true
+        }catch{$recovery.ErrorType=$_.Exception.GetType().Name;Write-Warning 'Original service operational recovery failed before binary replacement.';throw}
+        finally{$recovery|ConvertTo-Json|Set-Content (Join-Path $BackupDirectory 'rollback-result.json') -Encoding UTF8}
+    }
     throw $failure
 }

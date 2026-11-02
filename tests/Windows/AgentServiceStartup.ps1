@@ -196,12 +196,25 @@ public static class SscFixtureHttp {
     $heartbeat=$null;$deadline=(Get-Date).AddSeconds(35)
     do{try{$heartbeat=[SscFixtureHttp]::Get($clientCert,$serverPin).GetAwaiter().GetResult() | ConvertFrom-Json;break}catch{Start-Sleep -Milliseconds 500}}while((Get-Date) -lt $deadline)
     if(-not $heartbeat.agentHealthy){throw 'Automatic rollback lost authenticated heartbeat.'}
+    # Rollback must report failure honestly when the restored key is still inaccessible.
+    $keyAclBefore=(Get-Acl $keyFile).GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access)
+    try {
+        $acl=Get-Acl $keyFile;$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new('NT SERVICE\SSC.Agent',[Security.AccessControl.FileSystemRights]::Read,[Security.AccessControl.AccessControlType]::Deny));Set-Acl $keyFile $acl
+        $failedAsExpected=$false
+        try{ & "$PSScriptRoot\..\..\scripts\Update-SscService.ps1" -Role Agent -PublishDirectory $broken -BackupDirectory "$artifacts\rollback-operation-failure" }catch{$failedAsExpected=$true}
+        $state=Get-Content "$artifacts\rollback-operation-failure\rollback-result.json" -Raw | ConvertFrom-Json
+        if(-not $failedAsExpected -or -not $state.BinariesVerified -or $state.OperationalVerified){throw 'Unhealthy rollback was falsely reported as operational.'}
+    } finally {$acl=Get-Acl $keyFile;$acl.SetSecurityDescriptorSddlForm($keyAclBefore);Set-Acl $keyFile $acl;$keyAclBefore=$null}
+    Start-Service SSC.Agent
+    $heartbeat=$null;$deadline=(Get-Date).AddSeconds(35)
+    do{try{$heartbeat=[SscFixtureHttp]::Get($clientCert,$serverPin).GetAwaiter().GetResult()|ConvertFrom-Json;break}catch{Start-Sleep -Milliseconds 500}}while((Get-Date) -lt $deadline)
+    if(-not $heartbeat.agentHealthy){throw 'Recovery after failed operational rollback did not restore mTLS.'}
     # Do not publish intentionally corrupted binary fixtures as downloadable test artifacts.
     Remove-Item $corrupt,$broken -Recurse -Force
     $consecutive=0
     for($check=0;$check -lt 3;$check++){$reply=[SscFixtureHttp]::Get($clientCert,$serverPin).GetAwaiter().GetResult()|ConvertFrom-Json;if($reply.agentHealthy){$consecutive++}else{$consecutive=0}}
     if($consecutive -ne 3){throw 'Three authenticated heartbeat checks failed.'}
-    [pscustomobject]@{ThreeAuthenticatedHeartbeats=$consecutive;Provider=$Provider;RestrictedKeyDirectories=$true;FailureDiagnostics=$true;SecretRestorationRecovery=$true;TamperRejectedBeforeStop=$true;AutomaticRollback=$true;ScmSeconds=$scmSeconds;ScmBeforePrivateKeyImport=$true;UpdatePreservedSecrets=$true;Service='SSC.Agent';Identity=(Get-CimInstance Win32_Service -Filter "Name='SSC.Agent'").StartName;StartupSeconds=$timer.Elapsed.TotalSeconds;AuthenticatedHeartbeat=$true;ObservedAt=$heartbeat.observedAt} |
+    [pscustomobject]@{RollbackFailureReported=$true;ThreeAuthenticatedHeartbeats=$consecutive;Provider=$Provider;RestrictedKeyDirectories=$true;FailureDiagnostics=$true;SecretRestorationRecovery=$true;TamperRejectedBeforeStop=$true;AutomaticRollback=$true;ScmSeconds=$scmSeconds;ScmBeforePrivateKeyImport=$true;UpdatePreservedSecrets=$true;Service='SSC.Agent';Identity=(Get-CimInstance Win32_Service -Filter "Name='SSC.Agent'").StartName;StartupSeconds=$timer.Elapsed.TotalSeconds;AuthenticatedHeartbeat=$true;ObservedAt=$heartbeat.observedAt} |
         ConvertTo-Json | Set-Content "$artifacts\result.json"
     Get-Content "$artifacts\result.json"
 } finally {

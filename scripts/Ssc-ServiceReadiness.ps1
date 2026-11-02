@@ -4,6 +4,8 @@ function Get-SscAgentOperation {
     $service=Get-CimInstance Win32_Service -Filter "Name='SSC.Agent'"
     $running=$service -and $service.State -eq 'Running';$listening=$false;$ready=$false
     if($running){
+        $process=Get-CimInstance Win32_Process -Filter ("ProcessId="+$service.ProcessId)
+        if($process.CreationDate){$created=ConvertTo-SscUtcInstant $process.CreationDate;if($created -gt $Since){$Since=$created}}
         $config=ConvertFrom-SscJson (Get-Content (Join-Path $env:ProgramData 'ShadowServerCommand\Agent\service.json') -Raw)
         $client=[Net.Sockets.TcpClient]::new()
         try{$task=$client.ConnectAsync([string]$config.Heartbeat.BindAddress,[int]$config.Heartbeat.Port);if($task.Wait(1000)){$task.GetAwaiter().GetResult();$listening=$true}}catch{}finally{$client.Dispose()}
