@@ -28,34 +28,7 @@ public static class TlsCertificateLoader
             certificate = new X509Certificate2(path, password, StorageFlags);
             checkpoint?.Invoke("PfxImportComplete");
             stage = "certificate/private-key validation";
-            if (!certificate.HasPrivateKey) throw new CryptographicException("TLS certificate has no private key.");
-            if (PeerRejection(certificate, purpose) is { } reason) throw new CryptographicException(reason);
-            checkpoint?.Invoke("SigningProbeBegin");
-            var challenge = RandomNumberGenerator.GetBytes(32);
-            string algorithm;
-            int keySize;
-            using (var rsa = certificate.GetRSAPrivateKey())
-            {
-                if (rsa is not null)
-                {
-                    using var publicKey = certificate.GetRSAPublicKey();
-                    if (publicKey is null || !publicKey.VerifyData(challenge, rsa.SignData(challenge, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1), HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1))
-                        throw new CryptographicException("Private/public key mismatch.");
-                    algorithm = "RSA"; keySize = rsa.KeySize;
-                }
-                else
-                {
-                    using var key = certificate.GetECDsaPrivateKey();
-                    using var publicKey = certificate.GetECDsaPublicKey();
-                    if (key is null || publicKey is null || !publicKey.VerifyData(challenge, key.SignData(challenge, HashAlgorithmName.SHA256), HashAlgorithmName.SHA256))
-                        throw new CryptographicException("Unsupported or inaccessible TLS signing key.");
-                    algorithm = "ECDSA"; keySize = key.KeySize;
-                }
-            }
-            checkpoint?.Invoke("SigningProbeComplete");
-            logger?.LogInformation("TLS certificate ready: purpose={Purpose}, storage={StorageFlags}, sha256={CertificateSha256}, algorithm={Algorithm}, bits={KeySize}, expiresUtc={ExpiresUtc}, sanPresent={SanPresent}",
-                purpose, StorageFlags, certificate.GetCertHashString(HashAlgorithmName.SHA256), algorithm, keySize,
-                certificate.NotAfter.ToUniversalTime(), certificate.Extensions.Any(e => e.Oid?.Value == "2.5.29.17"));
+            ValidateSigningCertificate(certificate,purpose,logger,checkpoint??(_=>{}));
             return certificate;
         }
         catch (Exception ex)
@@ -64,6 +37,38 @@ public static class TlsCertificateLoader
             LogFailure(logger, "TLS credential initialization", stage, ex);
             throw;
         }
+    }
+
+    public static void ValidateSigningCertificate(X509Certificate2 certificate,TlsCertificatePurpose purpose,ILogger? logger,Action<string> checkpoint,string? credentialSource = null)
+    {
+        if (!certificate.HasPrivateKey) throw new CryptographicException("TLS certificate has no private key.");
+        if (PeerRejection(certificate, purpose) is { } reason) throw new CryptographicException(reason);
+        checkpoint?.Invoke("SigningProbeBegin");
+        var challenge = RandomNumberGenerator.GetBytes(32);
+        string algorithm;
+        int keySize;
+        using (var rsa = certificate.GetRSAPrivateKey())
+        {
+            if (rsa is not null)
+            {
+                using var publicKey = certificate.GetRSAPublicKey();
+                if (publicKey is null || !publicKey.VerifyData(challenge, rsa.SignData(challenge, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1), HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1))
+                throw new CryptographicException("Private/public key mismatch.");
+                algorithm = "RSA"; keySize = rsa.KeySize;
+            }
+            else
+            {
+                using var key = certificate.GetECDsaPrivateKey();
+                using var publicKey = certificate.GetECDsaPublicKey();
+                if (key is null || publicKey is null || !publicKey.VerifyData(challenge, key.SignData(challenge, HashAlgorithmName.SHA256), HashAlgorithmName.SHA256))
+                throw new CryptographicException("Unsupported or inaccessible TLS signing key.");
+                algorithm = "ECDSA"; keySize = key.KeySize;
+            }
+        }
+        checkpoint?.Invoke("SigningProbeComplete");
+        logger?.LogInformation("TLS certificate ready: purpose={Purpose}, storage={StorageFlags}, sha256={CertificateSha256}, algorithm={Algorithm}, bits={KeySize}, expiresUtc={ExpiresUtc}, sanPresent={SanPresent}",
+            purpose, credentialSource??StorageFlags.ToString(), certificate.GetCertHashString(HashAlgorithmName.SHA256), algorithm, keySize,
+            certificate.NotAfter.ToUniversalTime(), certificate.Extensions.Any(e => e.Oid?.Value == "2.5.29.17"));
     }
 
     public static string? PeerRejection(X509Certificate2 certificate, TlsCertificatePurpose purpose)

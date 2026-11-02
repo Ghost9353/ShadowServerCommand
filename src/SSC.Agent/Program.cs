@@ -15,6 +15,11 @@ try
     var options=builder.Configuration.GetSection("Heartbeat").Get<HeartbeatOptions>() ?? new();
     if(!options.Enabled)throw new InvalidOperationException("Heartbeat disabled; configure the private mTLS endpoint.");
     options.Validate();journal.Write("ConfigurationReady");
+    if(args.Contains("--prepare-tls"))
+    {
+        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(AgentMachineCredential.Prepare(options,new MachineSecretStore(),args.FirstOrDefault(a=>a.StartsWith("--expected-server-pin=",StringComparison.Ordinal))?.Split('=',2)[1]??"")));
+        return 0;
+    }
     builder.Services.AddSingleton(options);
     builder.Services.AddSingleton<ISecretStore,MachineSecretStore>();
     builder.Services.AddSingleton<AgentCertificateOwner>();
