@@ -78,8 +78,11 @@ public static class AgentMachineCredential
             new DirectoryInfo(directory).SetAccessControl(permissions);
             var reference=new AgentCredentialReference(pin,Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(options.CertificatePath))),Path.GetFullPath(options.CertificatePath));
             var temp=ReferencePath+".tmp";File.WriteAllText(temp,JsonSerializer.Serialize(reference));File.Move(temp,ReferencePath,true);
-            // Reapply inherited file ACL even when replacing an earlier reference.
-            var fileAcl=new FileSecurity();fileAcl.SetAccessRuleProtection(false,false);new FileInfo(ReferencePath).SetAccessControl(fileAcl);
+            // Reference trust is administrator-controlled; the service receives read access only.
+            var fileAcl=new FileSecurity();fileAcl.SetAccessRuleProtection(true,false);
+            foreach(var sid in new[]{new SecurityIdentifier(WellKnownSidType.LocalSystemSid,null),new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid,null)})
+                fileAcl.AddAccessRule(new FileSystemAccessRule(sid,FileSystemRights.FullControl,AccessControlType.Allow));
+            fileAcl.AddAccessRule(new FileSystemAccessRule(serviceSid,FileSystemRights.Read,AccessControlType.Allow));new FileInfo(ReferencePath).SetAccessControl(fileAcl);
             return new(pin,provider,created,ReferencePath);
         }
     }
@@ -88,7 +91,7 @@ public static class AgentMachineCredential
     {
         using var rsa=certificate.GetRSAPrivateKey();
         Console.Error.WriteLine(JsonSerializer.Serialize(new { Diagnostic="CredentialProviderInspection", RsaType=rsa?.GetType().Name,
-            CngProvider=(rsa as RSACng)?.Key.Provider.Provider, CngMachine=(rsa as RSACng)?.Key.IsMachineKey,
+            CngProvider=(rsa as RSACng)?.Key.Provider?.Provider, CngMachine=(rsa as RSACng)?.Key.IsMachineKey,
             CspProvider=(rsa as RSACryptoServiceProvider)?.CspKeyContainerInfo.ProviderName,
             CspMachine=(rsa as RSACryptoServiceProvider)?.CspKeyContainerInfo.MachineKeyStore }));
         if(rsa is RSACng cng && cng.Key.IsMachineKey && cng.Key.Provider==CngProvider.MicrosoftSoftwareKeyStorageProvider)

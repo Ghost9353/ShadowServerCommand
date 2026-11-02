@@ -41,6 +41,11 @@ try {
     & icacls.exe "$root\Agent" /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' 'NT SERVICE\SSC.Agent:(OI)(CI)M' | Out-Null
     & icacls.exe "$root\Secrets" /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' 'NT SERVICE\SSC.Agent:(OI)(CI)RX' | Out-Null
     & icacls.exe $target /grant 'NT SERVICE\SSC.Agent:(OI)(CI)RX' | Out-Null
+    & icacls.exe "$root\fixture-only.marker" /grant 'NT SERVICE\SSC.Agent:R' | Out-Null
+    $harnessTarget=Join-Path $env:ProgramFiles 'ShadowServerCommand\Harness'
+    New-Item $harnessTarget -ItemType Directory -Force | Out-Null
+    Copy-Item (Join-Path $HarnessDirectory '*') $harnessTarget -Recurse -Force
+    & icacls.exe $harnessTarget /grant 'NT SERVICE\SSC.Agent:(OI)(CI)RX' | Out-Null
     Add-Type -TypeDefinition @'
 using System;
 using System.Net.Http;
@@ -74,7 +79,7 @@ public static class SscFixtureHttp {
     $comparisons=@()
     foreach($mode in @('Machine','Ephemeral')){
         $known=@(Get-SscStartupRecords "$root\Agent\logs" | Where-Object Stage -eq 'ProcessEntry' | ForEach-Object ProcessKey)
-        $harness=(Join-Path (Resolve-Path $HarnessDirectory).Path 'SSC.TlsServiceHarness.exe')
+        $harness=Join-Path $harnessTarget 'SSC.TlsServiceHarness.exe'
         & sc.exe config SSC.Agent binPath= "`"$harness`" --DiagnosticMode=$mode" | Out-Null
         & sc.exe start SSC.Agent | Out-Null
         Start-Sleep -Seconds 2
