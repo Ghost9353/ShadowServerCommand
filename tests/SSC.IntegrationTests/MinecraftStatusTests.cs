@@ -10,7 +10,9 @@ public sealed class MinecraftStatusTests
     public async Task OpenPortIsDistinguishedFromRespondingMinecraft(bool respond)
     {
         using var listener=new TcpListener(IPAddress.Loopback,0);listener.Start();var port=((IPEndPoint)listener.LocalEndpoint).Port;
-        var check=MinecraftStatusProbe.CheckAsync("127.0.0.1",port,true,TimeSpan.FromMilliseconds(500),CancellationToken.None);
+        // Leave time for first-use JIT and Windows hosted-runner scheduling. The
+        // same deadline still proves a silent open port is not responsive.
+        var check=MinecraftStatusProbe.CheckAsync("127.0.0.1",port,true,TimeSpan.FromSeconds(5),CancellationToken.None);
         using var connection=await listener.AcceptTcpClientAsync();
         if(respond)
         {
