@@ -128,9 +128,14 @@ public static class SscFixtureHttp {
     if($LASTEXITCODE -ne 0 -or (Get-CimInstance Win32_Service -Filter "Name='SSC.Agent'").ProcessId -ne $beforeIdempotent){throw 'Windows PowerShell 5.1 idempotent preparation failed or disturbed the running service.'}
     $journalDirectory=Join-Path $root 'Agent\logs'
     $entries=@(Get-SscStartupRecords -Directory $journalDirectory)
-    $scm=@($entries | Where-Object Stage -eq 'ScmConnected')[0]
-    $import=@($entries | Where-Object Stage -eq 'StoreKeyOpenBegin')[0]
-    if(-not $scm -or -not $import -or $scm.Account -ne 'NT SERVICE\SSC.Agent' -or $scm.ElapsedMs -ge 5000 -or $scm.ElapsedMs -gt $import.ElapsedMs){throw 'Private key work happened before SCM connected.'}
+    # Earlier provider-harness processes also record SCM stages. Compare elapsed
+    # times only inside the active production Agent process, never across PIDs.
+    $activeStart=@($entries | Where-Object {$_.Stage -eq 'ProcessEntry' -and $_.ProcessId -eq $beforeIdempotent -and $_.Account -eq 'NT SERVICE\SSC.Agent'} | Sort-Object UtcTimestamp -Descending)[0]
+    $activeEntries=@($entries | Where-Object {$_.ProcessId -eq $beforeIdempotent -and $_.Build -eq $activeStart.Build -and $_.UtcTimestamp -ge $activeStart.UtcTimestamp})
+    $scm=@($activeEntries | Where-Object Stage -eq 'ScmConnected')
+    $import=@($activeEntries | Where-Object Stage -eq 'StoreKeyOpenBegin')
+    Write-Host ("SCM ordering predicate: activePid={0}; scmRecords={1}; keyRecords={2}; scmElapsed={3}; keyElapsed={4}" -f $beforeIdempotent,$scm.Count,$import.Count,$scm.ElapsedMs,$import.ElapsedMs)
+    if(-not $activeStart -or $scm.Count -ne 1 -or $import.Count -ne 1 -or $scm[0].Account -ne 'NT SERVICE\SSC.Agent' -or $scm[0].ElapsedMs -ge 5000 -or $scm[0].ElapsedMs -gt $import[0].ElapsedMs){throw 'Private key work happened before SCM connected for the active Agent process.'}
     $before=Get-FileHash "$root\Agent\service.json","$root\Agent\identity.pfx","$root\Secrets\agent-pfx.bin","$root\Credentials\Agent\identity.json"
     & powershell.exe -NoProfile -NonInteractive -File "$PSScriptRoot\..\..\scripts\Update-SscService.ps1" -Role Agent -PublishDirectory $PublishDirectory -BackupDirectory "$artifacts\update-backup"
     if($LASTEXITCODE -ne 0){throw 'Windows PowerShell 5.1 updater failed.'}
