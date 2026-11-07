@@ -1,53 +1,18 @@
 # Shadow Server Command — Minecraft Edition
 
 
-## Current package: corrected startup polling scripts (r2)
+## R3 TLS recovery candidate — existing AM4 installation
 
-**[Download Windows package r2](https://github.com/Ghost9353/ShadowServerCommand/raw/refs/heads/main/downloads/SSC-MC-agent-service-startup-repair-r2-win-x64.zip)** · [Source r2](https://github.com/Ghost9353/ShadowServerCommand/raw/refs/heads/main/downloads/SSC-MC-agent-service-startup-repair-r2-source.zip)
+R3 addresses Issue #2's `0x80090010` machine-key import failure. An administrator prepares the **existing** certificate/key in LocalMachine/My and grants the existing Agent account read access to that exact key. The service no longer imports machine keys at startup. TLS, mutual client authentication, trust pins, existing config/secrets and AM5 settings remain in place.
 
-[Issue #1 diagnosis and validation](docs/CI-JOURNAL-FILTER-REPAIR.md): fixed subsecond timestamp loss, fresh-process matching, journal rotation/partial reads, and fixture secret restoration. PowerShell 5.1/7 tests, all 61 .NET tests, and the complete real Windows SCM/update/failure/recovery/tamper/rollback regression passed: [green CI](https://github.com/Ghost9353/ShadowServerCommand/actions/runs/41363555123).
+- [PR #3: final report, CI results and release artifact download](https://github.com/Ghost9353/ShadowServerCommand/pull/3)
+- [AM4 preparation, update, AM5 verification, troubleshooting and rollback](docs/R3-TLS-RECOVERY.md)
+- [Root-cause evidence, implementation and verification limits](docs/R3-ENGINEERING-REPORT.md)
+- [Separate desktop development plan after R3](docs/DESKTOP-NEXT-DEVELOPMENT-PLAN.md)
 
-Agent and Watchdog binaries are unchanged, byte-for-byte. No production certificates, keys, configuration or AM4/AM5 state are changed by this correction. Keep the scripts folder together; the new shared journal helper is required by the updater and verifier.
+Download `SSC-Minecraft-Watchdog-R3-win-x64.zip` and `R3-SHA256SUMS.txt` from the `R3-win-x64-<source-commit>` workflow artifact linked in the PR. This is an **Agent-only update for an existing installation**, not a fresh installer. Preserve the scripts together. Windows PowerShell 5.1 is supported. No Watchdog binary change is required.
 
-
-## Current Agent service-startup repair
-
-**[Download the corrected Windows x64 package](https://github.com/Ghost9353/ShadowServerCommand/raw/refs/heads/main/downloads/SSC-MC-agent-service-startup-repair-win-x64.zip)**
-
-- [AM4 update, AM5 live verification and rollback](docs/AGENT-SERVICE-STARTUP-REPAIR.md)
-- [Audit, limitations and real Windows service regression evidence](docs/AGENT-SERVICE-STARTUP-REPORT.md)
-- [Current source ZIP](https://github.com/Ghost9353/ShadowServerCommand/raw/refs/heads/main/downloads/SSC-MC-agent-service-startup-repair-source.zip)
-
-This supersedes the earlier TLS package for the Agent. The corrected Agent is tested through SCM under `NT SERVICE\SSC.Agent`, including authenticated heartbeat, verified updates, diagnostic failure/recovery, tamper rejection and automatic rollback. Update AM4; leave a functioning repaired AM5 Watchdog alone. Production certificates, pins, secrets and configuration are preserved; Minecraft is never restarted. Actual AM4/AM5 acceptance still requires the live verification commands.
-
-Earlier packages below are retained for history/rollback, not the recommended Agent update.
-
-## TLS heartbeat repair — existing AM4/AM5 installations
-
-**[Download the repaired Agent + Watchdog Windows x64 package](https://github.com/Ghost9353/ShadowServerCommand/raw/refs/heads/main/downloads/SSC-MC-tls-heartbeat-repair-win-x64.zip)**
-
-- [AM4/AM5 update commands, verification and rollback](docs/TLS-HEARTBEAT-REPAIR.md)
-- [Root cause and executed Linux/Windows tests](docs/TLS-REPAIR-REPORT.md)
-- [Current source ZIP](https://github.com/Ghost9353/ShadowServerCommand/raw/refs/heads/main/downloads/SSC-MC-tls-heartbeat-repair-source.zip)
-
-This binary-only repair preserves existing configuration, certificate identities/pins, encrypted secrets and history. It restarts only SSC services, never Minecraft. Windows Schannel tests pass; the runbook includes live checks for your actual service identities and Discord channel.
-
-The original full Windows ZIP below predates this TLS repair. Existing installations should apply the repair package above; use the original package only as a baseline/rollback reference.
-
-
-## Download to your Windows PC
-
-- [Download the ready-built Windows x64 package](https://github.com/Ghost9353/ShadowServerCommand/raw/refs/heads/main/downloads/SSC-MC-watchdog-win-x64.zip)
-- [Download the original source ZIP](https://github.com/Ghost9353/ShadowServerCommand/raw/refs/heads/main/downloads/SSC-MC-watchdog-source.zip)
-- [Installation and configuration guide](docs/WATCHDOG.md)
-- [Safe Discord test instructions](docs/WATCHDOG-TESTING.md)
-
-Save the Windows ZIP to **Downloads**, right-click it in File Explorer, and select **Extract All**. Keep each published application directory together. The package includes the desktop, Agent, Watchdog, configuration examples, deployment scripts, and guides.
-
-Required runtimes: .NET 8 Windows Desktop Runtime x64 for the desktop, ASP.NET Core Runtime 8 x64 on AM4 for the Agent, and .NET Runtime 8 x64 on AM5 for the Watchdog. Follow the installation guide before starting either service.
-
-TLS repair Release build: zero warnings/errors; 61 automated tests passed on Linux and Windows CI. Actual service-account deployment and real Discord delivery after the repair remain to be verified on the PCs. See [the report](docs/WATCHDOG-REPORT.md).
-
+Controlled Windows-service CNG/CAPI tests are separate from actual AM4/AM5 acceptance. Do not declare production recovery until the actual Watchdog observes three fresh authenticated heartbeats. No automatic production deployment or PR merge is performed. Historical R2/baseline downloads remain in `downloads/` for reference; their earlier green CI did not establish the production repair.
 
 **SSC-MC · v0.1.0 Alpha · desktop simulation + independent watchdog extension**
 

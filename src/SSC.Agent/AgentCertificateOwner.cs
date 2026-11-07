@@ -11,8 +11,9 @@ public sealed class AgentCertificateOwner(HeartbeatOptions options,ISecretStore 
     public async Task InitializeAsync(CancellationToken ct)
     {
         journal.Write("CertificateInitializationBegin");
-        var load=Task.Run(()=>TlsCertificateLoader.Load(options.CertificatePath,secrets,options.CertificatePasswordSecret,
-            TlsCertificatePurpose.Server,logger,stage=>journal.Write(stage)),CancellationToken.None);
+        var load=Task.Run(()=> OperatingSystem.IsWindows()
+            ? AgentMachineCredential.Load(options,logger,stage=>journal.Write(stage))
+            : TlsCertificateLoader.Load(options.CertificatePath,secrets,options.CertificatePasswordSecret,TlsCertificatePurpose.Server,logger,stage=>journal.Write(stage)),CancellationToken.None);
         try
         {
             _certificate=await load.WaitAsync(TimeSpan.FromSeconds(20),ct);

@@ -5,6 +5,7 @@ param([Parameter(Mandatory)][ValidateSet('Agent','Watchdog')][string]$Role,
       [Parameter(Mandatory)][string]$PublishDirectory,[string]$BackupDirectory,[switch]$LegacyRollback)
 $ErrorActionPreference='Stop'
 . "$PSScriptRoot\Ssc-StartupJournal.ps1"
+. "$PSScriptRoot\Ssc-ServiceReadiness.ps1"
 function Assert-Package([string]$Directory) {
     $manifestFile=Join-Path $Directory 'deployment-manifest.json'
     if(-not(Test-Path $manifestFile)){throw 'Missing deployment-manifest.json; use a complete corrected package or a verified rollback backup.'}
@@ -25,6 +26,13 @@ $source=(Resolve-Path $PublishDirectory).Path.TrimEnd('\')
 if($source -eq $target.TrimEnd('\')){throw 'Publish source must differ from the running installation.'}
 if($LegacyRollback -and (Split-Path $source -Leaf) -ne 'previous-binaries'){throw 'LegacyRollback is restricted to an explicit previous-binaries backup.'}
 $manifest=Assert-Package $source # Before stopping anything.
+if($Role -eq 'Agent' -and $manifest.CredentialMode -eq 'ProvisionedMachineStore'){
+    $referencePath=Join-Path $env:ProgramData 'ShadowServerCommand\Credentials\Agent\identity.json'
+    if(-not(Test-Path $referencePath)){throw 'Prepare the existing Agent key with Prepare-SscAgentTls.ps1 before stopping/updating the working service.'}
+    $reference=Get-Content $referencePath -Raw | ConvertFrom-Json
+    $configuration=Get-Content (Join-Path $env:ProgramData 'ShadowServerCommand\Agent\service.json') -Raw | ConvertFrom-Json
+    if($reference.SourcePfxPath -ne $configuration.Heartbeat.CertificatePath -or (Get-FileHash $reference.SourcePfxPath -Algorithm SHA256).Hash -ne $reference.SourcePfxSha256){throw 'Prepared credential does not match configured PFX. Existing service was not stopped.'}
+}
 $service=Get-Service $name -ErrorAction Stop
 $installed=Get-CimInstance Win32_Service -Filter "Name='$name'"
 if($installed.PathName.Trim('"') -ne (Join-Path $target "$name.exe")){throw 'Nonstandard executable path; inspect registration before applying this updater.'}
@@ -34,6 +42,8 @@ if(-not $PSCmdlet.ShouldProcess($name,'Verify package, stop only this SSC servic
 New-Item $BackupDirectory -ItemType Directory -Force | Out-Null
 & icacls.exe $BackupDirectory /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
 if($LASTEXITCODE -ne 0){throw 'Backup ACL failed.'}
+$previousReady=$false
+if($Role -eq 'Agent' -and $service.Status -eq 'Running'){$previousReady=(Get-SscAgentOperation).HttpsJournalReady}
 $wasRunning=$service.Status -eq 'Running';$binaryBackup=Join-Path $BackupDirectory 'previous-binaries'
 Stop-Service $name -ErrorAction Stop
 (Get-Service $name).WaitForStatus('Stopped',[TimeSpan]::FromSeconds(30))
@@ -77,11 +87,48 @@ try {
 } catch {
     $failure=$_
     if($backupComplete -and $copyStarted){
-        Stop-Service $name -ErrorAction SilentlyContinue
-        Copy-Item (Join-Path $binaryBackup '*') $target -Recurse -Force
-        $null=Assert-Package $target
-        if($wasRunning){try{Start-Service $name}catch{Write-Warning 'Previous binaries restored; manual service start still required.'}}
-        Write-Warning 'Patch failed; previous binaries have been restored. Startup logs remain in ProgramData.'
-    } elseif($wasRunning){try{Start-Service $name}catch{Write-Warning 'Service remains stopped; start the original installation manually.'}}
+        $rollback=[ordered]@{BinariesVerified=$false;ServiceRunning=$false;PreviousExpectedRunning=$wasRunning;OperationalVerified=$false;AuthenticatedHeartbeatVerified=$false}
+        try {
+            Stop-Service $name -ErrorAction Stop
+            (Get-Service $name).WaitForStatus('Stopped',[TimeSpan]::FromSeconds(30))
+            $previousManifest=Assert-Package $binaryBackup
+            # Remove only files introduced by this update. Leave unrelated installation files intact.
+            foreach($file in $manifest.Files){
+                if($previousManifest.Files.Path -notcontains $file.Path){
+                    $introduced=Join-Path $target $file.Path
+                    if(Test-Path $introduced -PathType Leaf){Remove-Item $introduced -Force}
+                }
+            }
+            Copy-Item (Join-Path $binaryBackup '*') $target -Recurse -Force
+            $null=Assert-Package $target
+            $rollback.BinariesVerified=$true
+            $rollbackStarted=[DateTimeOffset]::UtcNow
+            if($wasRunning){
+                Start-Service $name;(Get-Service $name).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
+                if($Role -eq 'Agent'){
+                    $operation=Wait-SscAgentOperation -Since $rollbackStarted -RequireJournal $previousReady
+                    $rollback.ServiceRunning=$operation.ServiceRunning;$rollback.ListenerReachable=$operation.ListenerReachable;$rollback.HttpsJournalReady=$operation.HttpsJournalReady
+                    $rollback.OperationalVerified=$true
+                    $rollback.VerificationLevel=if($previousReady){'Running + listener + fresh HTTPS readiness'}else{'Legacy running + listener only; TLS not verified'}
+                }else{$rollback.ServiceRunning=$true;$rollback.OperationalVerified=$true;$rollback.VerificationLevel='SCM running only; remote monitoring not verified'}
+            }else{$rollback.VerificationLevel='Previous service intentionally stopped';$rollback.OperationalVerified=$false}
+        }catch{
+            $rollback.ErrorType=$_.Exception.GetType().Name
+            $rollback.ServiceRunning=(Get-Service $name -ErrorAction SilentlyContinue).Status -eq 'Running'
+            Write-Warning 'Rollback recovery FAILED. Inspect rollback-result.json for binary verification and service status, plus startup logs.'
+            throw
+        }finally{$rollback | ConvertTo-Json | Set-Content (Join-Path $BackupDirectory 'rollback-result.json') -Encoding UTF8}
+        Write-Warning ("Patch failed; previous binaries restored. Previous operational={0}; level={1}. AM5 authenticated heartbeats remain a separate check." -f $rollback.OperationalVerified,$rollback.VerificationLevel)
+    } elseif($wasRunning){
+        $recovery=[ordered]@{BinariesChanged=$false;ServiceRunning=$false;OperationalVerified=$false;AuthenticatedHeartbeatVerified=$false}
+        try {
+            $since=[DateTimeOffset]::UtcNow;Start-Service $name
+            (Get-Service $name).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
+            if($Role -eq 'Agent'){$operation=Wait-SscAgentOperation -Since $since -RequireJournal $previousReady;$recovery.ServiceRunning=$operation.ServiceRunning;$recovery.ListenerReachable=$operation.ListenerReachable;$recovery.HttpsJournalReady=$operation.HttpsJournalReady}
+            else{$recovery.ServiceRunning=$true}
+            $recovery.OperationalVerified=$true
+        }catch{$recovery.ErrorType=$_.Exception.GetType().Name;Write-Warning 'Original service operational recovery failed before binary replacement.';throw}
+        finally{$recovery|ConvertTo-Json|Set-Content (Join-Path $BackupDirectory 'rollback-result.json') -Encoding UTF8}
+    }
     throw $failure
 }
