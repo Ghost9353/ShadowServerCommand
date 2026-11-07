@@ -3,7 +3,9 @@
 param([ValidateRange(15,600)][int]$TimeoutSeconds=120)
 $ErrorActionPreference='Stop'
 . "$PSScriptRoot\Ssc-StartupJournal.ps1"
+. "$PSScriptRoot\Ssc-HeartbeatVerification.ps1"
 $start=[DateTimeOffset]::UtcNow
+$observation=@{Count=0;Last=$null}
 $deadline=$start.AddSeconds($TimeoutSeconds)
 $path=Join-Path $env:ProgramData 'ShadowServerCommand\Status\watchdog.json'
 while([DateTimeOffset]::UtcNow -lt $deadline){
@@ -12,12 +14,10 @@ while([DateTimeOffset]::UtcNow -lt $deadline){
     if(Test-Path $path){
         try {
             $snapshot=ConvertFrom-SscJson (Get-Content $path -Raw)
-            $written=(ConvertTo-SscUtcInstant $snapshot.WrittenAt)
-            $heartbeat=if($snapshot.State.LastHeartbeat){(ConvertTo-SscUtcInstant $snapshot.State.LastHeartbeat)}else{$null}
-            $online=($snapshot.State.Computer -eq 1 -or $snapshot.State.Computer -eq 'Online')
-            if($snapshot.ServiceHealth -eq 'RUNNING' -and $written -ge $start -and $heartbeat -and
-               $heartbeat -ge $start -and $online -and $snapshot.State.Failures -eq 0 -and $snapshot.State.Successes -ge 3){
+            if(Update-SscHeartbeatVerification -Observation $observation -StartedAt $start -Snapshot $snapshot){
+                $heartbeat=$observation.Last
                 [pscustomobject]@{AuthenticatedHeartbeat=$true;Computer='Online';LastHeartbeat=$heartbeat;
+                    FreshHeartbeatsObserved=$observation.Count;
                     HeartbeatLatencyMs=$snapshot.State.HeartbeatLatencyMs;ConsecutiveFailures=$snapshot.State.Failures;
                     LastEvidence=$snapshot.State.LastEvidence;DeliveryStatus=$snapshot.DeliveryStatus;LastDelivered=$snapshot.LastDelivered} | Format-List
                 Write-Host 'PASS: fresh authenticated heartbeat and three consecutive successful checks. Verify recovery and Discord delivery using the runbook.'

@@ -13,7 +13,7 @@ jobs:
         with:
           dotnet-version: '8.0.x'
       - name: Validate deployment script syntax
-        shell: pwsh
+        shell: powershell
         run: |
           Get-ChildItem scripts -Filter *.ps1 | ForEach-Object {
             $tokens = $null
@@ -23,10 +23,14 @@ jobs:
           }
       - name: Journal regression tests (PowerShell 7)
         shell: pwsh
-        run: ./tests/Windows/StartupJournal.Tests.ps1
+        run: |
+          ./tests/Windows/StartupJournal.Tests.ps1
+          ./tests/Windows/HeartbeatVerification.Tests.ps1
       - name: Journal regression tests (Windows PowerShell 5.1)
         shell: powershell
-        run: ./tests/Windows/StartupJournal.Tests.ps1
+        run: |
+          ./tests/Windows/StartupJournal.Tests.ps1
+          ./tests/Windows/HeartbeatVerification.Tests.ps1
       - name: Build and test
         shell: pwsh
         run: ./scripts/verify.ps1
@@ -48,3 +52,35 @@ jobs:
         with:
           name: test-results-${{ matrix.provider }}
           path: TestResults
+  package-r3:
+    needs: verify
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/r3/tls-key-access-recovery'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Publish verified R3 Agent
+        shell: pwsh
+        run: |
+          dotnet publish src/SSC.Agent -c Release -r win-x64 --self-contained false -o artifacts/r3-agent
+          if ($LASTEXITCODE) { throw 'R3 publish failed' }
+      - name: Package and verify R3 (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          ./scripts/New-SscR3Package.ps1 -AgentPublishDirectory artifacts/r3-agent -OutputDirectory artifacts/r3-release -SourceCommit $env:GITHUB_SHA
+          git archive --format=zip --output=artifacts/r3-release/SSC-Minecraft-Watchdog-R3-source.zip HEAD
+          if ($LASTEXITCODE) { throw 'Source archive failed' }
+          Get-ChildItem artifacts/r3-release -Filter *.zip | Sort-Object Name | ForEach-Object {
+            '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash,$_.Name
+          } | Set-Content artifacts/r3-release/R3-SHA256SUMS.txt -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: R3-win-x64-${{ github.sha }}
+          retention-days: 90
+          if-no-files-found: error
+          path: |
+            artifacts/r3-release/SSC-Minecraft-Watchdog-R3-win-x64.zip
+            artifacts/r3-release/SSC-Minecraft-Watchdog-R3-source.zip
+            artifacts/r3-release/R3-SHA256SUMS.txt

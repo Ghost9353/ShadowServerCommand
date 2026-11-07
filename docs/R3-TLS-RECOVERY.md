@@ -17,7 +17,18 @@ The Agent remains a non-admin Windows service. Existing Kestrel mTLS, SHA256 pin
 
 ## Prerequisites and package verification
 
-Use the reviewed `SSC-MC-R3-win-x64.zip` candidate and `R3-SHA256SUMS.txt` from the PR branch's downloads folder. Verify the ZIP's SHA256 with `Get-FileHash` against that published checksum, then extract to `C:\SSC-R3` on AM4. Retain the scripts folder together. The Agent is framework-dependent Windows x64 and uses the already-installed .NET/ASP.NET Core 8 x64 runtimes; no SDK is needed on AM4.
+Use the reviewed `SSC-Minecraft-Watchdog-R3-win-x64.zip` candidate and `R3-SHA256SUMS.txt` from the `R3-win-x64-<source-commit>` artifact of a successful branch workflow run linked in PR #3. Verify the ZIP's SHA256 with `Get-FileHash` against that published checksum, then extract to `C:\SSC-R3` on AM4. The artifact also contains a source ZIP; retain it for review. Workflow artifacts require GitHub sign-in and expire after 90 days; archive the reviewed ZIP/checksum locally. Retain the scripts folder together. The Agent is framework-dependent Windows x64 and uses the already-installed .NET/ASP.NET Core 8 x64 runtimes; no SDK is needed on AM4.
+
+After verifying the ZIP checksum and extracting, run this **before preparation or updating**:
+
+```powershell
+# Compare this measured hash to the published R3-SHA256SUMS.txt from the same artifact.
+Get-FileHash "$env:USERPROFILE\Downloads\SSC-Minecraft-Watchdog-R3-win-x64.zip" -Algorithm SHA256
+Set-Location C:\SSC-R3
+.\scripts\Test-SscR3Package.ps1 -Directory C:\SSC-R3
+```
+
+`release-manifest.json` records the exact source commit and SHA256 of every shipped file. `agent/deployment-manifest.json` is the updater's per-binary manifest. The external ZIP checksum anchors these manifests; this release is not Authenticode signed. Do not substitute files from older packages.
 
 Before any update, record (do not dump secrets):
 
@@ -39,7 +50,21 @@ This prints a **public fingerprint**, not a webhook or password:
 
 Copy that 64-hex value for the next command. Do not change AM5 configuration. If it is absent/invalid, resolve the intended existing trust identity before preparation. Do not substitute a newly generated certificate.
 
-## Stage 2 — prepare AM4 without stopping its working Agent
+## Stage 2 — back up and prepare AM4 without stopping its working Agent
+
+Before preparation, take a binary-only backup while the old service is still running (the updater later also takes its stopped, verified rollback backup). No ProgramData secrets need to leave their existing protected locations:
+
+```powershell
+$preparationBackup = 'C:\SSC-R3\before-preparation-binaries'
+if (Test-Path $preparationBackup) { throw 'Choose a new backup directory.' }
+New-Item $preparationBackup -ItemType Directory | Out-Null
+& icacls.exe $preparationBackup /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F'
+if ($LASTEXITCODE) { throw 'Backup protection failed.' }
+Copy-Item "$env:ProgramFiles\ShadowServerCommand\Agent\*" $preparationBackup -Recurse
+.\scripts\Write-SscDeploymentManifest.ps1 -Role Agent -Directory $preparationBackup
+```
+
+Do not run another installer/updater concurrently. Preparation adds only the credential subtree/key described above; the actual update rollback snapshot remains `backup-before-r3\previous-binaries`.
 
 Elevated 64-bit Windows PowerShell on AM4:
 
@@ -76,20 +101,38 @@ Expected journal stages now include `CredentialReferenceReadBegin/Complete`, `St
 
 ## Stage 4 — actual AM5 acceptance (required)
 
-Copy/extract the scripts on AM5 or use the existing corrected R2 scripts; do not update/reconfigure/restart a functioning AM5 Watchdog. Run:
+Copy/extract the complete R3 scripts folder on AM5; do not update/reconfigure/restart a functioning AM5 Watchdog. Run:
 
 ```powershell
 Set-Location C:\SSC-R3
 .\scripts\Test-SscTlsRepair.ps1 -TimeoutSeconds 120
 ```
 
-Acceptance requires **fresh populated LastHeartbeat, zero consecutive failures, Computer Online and three consecutive authenticated healthy heartbeats** from the actual Watchdog. Review its measured latency, recovered incident and recovery alert. The verifier is read-only and independent of the desktop. Store preparation, private-key signing, local TCP connectivity, HttpsReady and green CI alone do not establish this acceptance criterion.
+Acceptance requires **fresh populated LastHeartbeat, zero consecutive failures, Computer Online and three consecutive authenticated healthy heartbeats** from the actual Watchdog. The verifier observes three distinct successful heartbeat timestamps after it starts, rather than accepting a preexisting Successes=3 counter. Review its measured latency, recovered incident and recovery alert. The verifier is read-only and independent of the desktop. Store preparation, private-key signing, local TCP connectivity, HttpsReady and green CI alone do not establish this acceptance criterion.
 
-This cloud session cannot execute these steps on AM4/AM5 and has not done so. Do not call R3 production-successful until the actual AM5 checks pass. Discord delivery code/secret is unchanged; its existing configured delivery continues independently of the desktop.
+This cloud session cannot execute these steps on AM4/AM5 and has not done so. Do not call R3 production-successful until the actual AM5 checks pass. Discord delivery code/secret is unchanged; its existing configured delivery continues independently of the desktop. Confirm the real recovery message in the existing channel. If no outage/recovery event was generated, use the existing secure test on **AM5** (it reads the protected webhook locally; do not paste it into chat):
+
+```powershell
+# Optional controlled test: the existing test command requires exclusive outbox access.
+# This briefly pauses only AM5 monitoring and records an observation gap.
+$wasRunning = (Get-Service SSC.Watchdog).Status -eq 'Running'
+try {
+  if ($wasRunning) {
+    Stop-Service SSC.Watchdog
+    (Get-Service SSC.Watchdog).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30))
+  }
+  .\scripts\Test-SscDiscord.ps1
+} finally {
+  if ($wasRunning) { Start-Service SSC.Watchdog }
+}
+.\scripts\Test-SscTlsRepair.ps1 -TimeoutSeconds 120
+```
+
+This sends an explicitly labeled test without changing Minecraft, stopping the Agent, or changing the webhook. It temporarily pauses AM5 monitoring for exclusive outbox access and always attempts to restore its prior running state; verify the Watchdog is running afterward. See `docs/WATCHDOG-TESTING.md`. Actual channel delivery is a manual production check; CI uses local delivery test fixtures.
 
 ## Rollback and truthful recovery status
 
-On update/startup failure, the updater restores and re-hashes prior binaries, starts the prior service if it had been running, and **checks operational recovery**. Read `<BackupDirectory>\rollback-result.json`:
+On update/startup failure, the updater waits for the service to stop, removes only incoming-manifest files absent from the prior backup, restores and re-hashes prior binaries, starts the prior service if it had been running, and **checks operational recovery**. Read `<BackupDirectory>\rollback-result.json`:
 
 - `BinariesVerified`: prior files match the backup manifest.
 - `ServiceRunning`, `ListenerReachable`, `HttpsJournalReady`: measured local checks.

@@ -57,6 +57,8 @@ public static class AgentMachineCredential
         if(TlsCertificateLoader.PeerRejection(expected,TlsCertificatePurpose.Server) is { } rejection)throw new CryptographicException(rejection);
         var pin=expected.GetCertHashString(HashAlgorithmName.SHA256);
         if(!CertificatePins.Matches(expected,expectedServerSha256))throw new CryptographicException("Existing PFX does not match the expected public server pin. No credential is prepared.");
+        var directory=PrepareReferenceDirectory(serviceSid);
+        RejectReparsePoint(ReferencePath);
         if(File.Exists(ReferencePath))
         {
             var previous=JsonSerializer.Deserialize<AgentCredentialReference>(File.ReadAllText(ReferencePath));
@@ -66,26 +68,65 @@ public static class AgentMachineCredential
         certificate ??= new X509Certificate2(options.CertificatePath,password,X509KeyStorageFlags.MachineKeySet|X509KeyStorageFlags.PersistKeySet);
         using(certificate)
         {
+            if(!CertificatePins.Matches(certificate,pin))throw new CryptographicException("Configured PFX identity changed during preparation.");
             var (provider,path)=KeyFile(certificate);
             var keyInfo=new FileInfo(path);var acl=keyInfo.GetAccessControl();
             acl.AddAccessRule(new FileSystemAccessRule(serviceSid,FileSystemRights.Read,AccessControlType.Allow));keyInfo.SetAccessControl(acl);
             TlsCertificateLoader.ValidateSigningCertificate(certificate,TlsCertificatePurpose.Server,null,_=>{});
             if(created){using var store=new X509Store(StoreName.My,StoreLocation.LocalMachine);store.Open(OpenFlags.ReadWrite);store.Add(certificate);}
-            var directory=Path.GetDirectoryName(ReferencePath)!;Directory.CreateDirectory(directory);
+            var reference=new AgentCredentialReference(pin,Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(options.CertificatePath))),Path.GetFullPath(options.CertificatePath));
+            // Use a new file inside the protected directory: never follow or truncate a
+            // pre-existing .tmp file, and protect the new reference before publishing it.
+            var temp=Path.Combine(directory,".identity-"+Guid.NewGuid().ToString("N")+".tmp");
+            var fileAcl=new FileSecurity();fileAcl.SetAccessRuleProtection(true,false);
+            fileAcl.SetOwner(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid,null));
+            foreach(var sid in new[]{new SecurityIdentifier(WellKnownSidType.LocalSystemSid,null),new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid,null)})
+                fileAcl.AddAccessRule(new FileSystemAccessRule(sid,FileSystemRights.FullControl,AccessControlType.Allow));
+            fileAcl.AddAccessRule(new FileSystemAccessRule(serviceSid,FileSystemRights.Read,AccessControlType.Allow));
+            try
+            {
+                using(var stream=new FileStream(temp,FileMode.CreateNew,FileAccess.Write,FileShare.None))
+                {
+                    JsonSerializer.Serialize(stream,reference);stream.Flush(true);
+                }
+                new FileInfo(temp).SetAccessControl(fileAcl);
+                RejectReparsePoint(ReferencePath);
+                File.Move(temp,ReferencePath,true);
+            }
+            finally { if(File.Exists(temp))File.Delete(temp); }
+            return new(pin,provider,created,ReferencePath);
+        }
+    }
+    [SupportedOSPlatform("windows")]
+    private static string PrepareReferenceDirectory(SecurityIdentifier serviceSid)
+    {
+        // Keep existing ProgramData/config/secret ACLs untouched. Only the new
+        // credential subtree is protected; reject redirection before changing it.
+        RejectReparsePoint(ServicePaths.Root);
+        var credentials=Path.Combine(ServicePaths.Root,"Credentials");
+        var directory=Path.GetDirectoryName(ReferencePath)!;
+        foreach(var path in new[]{credentials,directory})
+        {
+            RejectReparsePoint(path);Directory.CreateDirectory(path);RejectReparsePoint(path);
             var permissions=new DirectorySecurity();permissions.SetAccessRuleProtection(true,false);
+            // Replacing a DACL alone leaves a pre-existing owner with WRITE_DAC.
+            permissions.SetOwner(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid,null));
             foreach(var sid in new[]{new SecurityIdentifier(WellKnownSidType.LocalSystemSid,null),new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid,null)})
                 permissions.AddAccessRule(new FileSystemAccessRule(sid,FileSystemRights.FullControl,InheritanceFlags.ContainerInherit|InheritanceFlags.ObjectInherit,PropagationFlags.None,AccessControlType.Allow));
             permissions.AddAccessRule(new FileSystemAccessRule(serviceSid,FileSystemRights.ReadAndExecute,InheritanceFlags.ContainerInherit|InheritanceFlags.ObjectInherit,PropagationFlags.None,AccessControlType.Allow));
-            new DirectoryInfo(directory).SetAccessControl(permissions);
-            var reference=new AgentCredentialReference(pin,Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(options.CertificatePath))),Path.GetFullPath(options.CertificatePath));
-            var temp=ReferencePath+".tmp";File.WriteAllText(temp,JsonSerializer.Serialize(reference));File.Move(temp,ReferencePath,true);
-            // Reference trust is administrator-controlled; the service receives read access only.
-            var fileAcl=new FileSecurity();fileAcl.SetAccessRuleProtection(true,false);
-            foreach(var sid in new[]{new SecurityIdentifier(WellKnownSidType.LocalSystemSid,null),new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid,null)})
-                fileAcl.AddAccessRule(new FileSystemAccessRule(sid,FileSystemRights.FullControl,AccessControlType.Allow));
-            fileAcl.AddAccessRule(new FileSystemAccessRule(serviceSid,FileSystemRights.Read,AccessControlType.Allow));new FileInfo(ReferencePath).SetAccessControl(fileAcl);
-            return new(pin,provider,created,ReferencePath);
+            new DirectoryInfo(path).SetAccessControl(permissions);
         }
+        return directory;
+    }
+    private static void RejectReparsePoint(string path)
+    {
+        try
+        {
+            if((File.GetAttributes(path)&FileAttributes.ReparsePoint)!=0)
+                throw new IOException("Credential preparation refuses reparse-point paths.");
+        }
+        catch(FileNotFoundException) { }
+        catch(DirectoryNotFoundException) { }
     }
     [SupportedOSPlatform("windows")]
     public static (string Provider,string Path) KeyFile(X509Certificate2 certificate)

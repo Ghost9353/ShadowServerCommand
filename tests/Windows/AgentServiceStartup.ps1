@@ -12,7 +12,7 @@ if((Test-Path $root) -or (Test-Path $target)){throw 'Existing SSC data/binaries 
 $began=Get-Date
 $artifacts=Join-Path $env:GITHUB_WORKSPACE 'TestResults\service-startup'
 New-Item $artifacts -ItemType Directory -Force | Out-Null
-$agentCert=$null;$clientCert=$null;$protectedOriginal=$null;$secretRestored=$false;$directoryAcls=@{};$keyAclBefore=$null;$keyFile=$null
+$agentCert=$null;$clientCert=$null;$protectedOriginal=$null;$secretRestored=$false;$directoryAcls=@{};$keyAclBefore=$null;$keyFile=$null;$storeCertificateRemoved=$false
 $creation=if($Provider -eq 'CNG'){@{Provider='Microsoft Software Key Storage Provider'}}else{@{Provider='Microsoft Enhanced RSA and AES Cryptographic Provider';KeySpec='KeyExchange'}}
 try {
     New-Item "$root\Agent" -ItemType Directory -Force | Out-Null
@@ -74,9 +74,11 @@ public static class SscFixtureHttp {
         $keyFile=Join-Path $env:ProgramData ($folder+$rsa.Key.UniqueName)
     }else{$keyFile=Join-Path $env:ProgramData ('Microsoft\Crypto\RSA\MachineKeys\'+$rsa.CspKeyContainerInfo.UniqueKeyContainerName)}
     $rsa.Dispose()
-    foreach($protectedFile in @($keyFile,"$root\Credentials\Agent\identity.json")){
-        $direct=@((Get-Acl $protectedFile).Access | Where-Object {$_.IdentityReference.Value -eq 'NT SERVICE\SSC.Agent' -and $_.AccessControlType -eq 'Allow'})
-        if(-not $direct.Count -or @($direct | Where-Object {($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Write) -ne 0}).Count){throw 'Service received write rights to the prepared private key or reference.'}
+    foreach($protectedFile in @($keyFile,"$root\Credentials","$root\Credentials\Agent","$root\Credentials\Agent\identity.json")){
+        $fileAcl=Get-Acl $protectedFile
+        $direct=@($fileAcl.Access | Where-Object {$_.IdentityReference.Value -eq 'NT SERVICE\SSC.Agent' -and $_.AccessControlType -eq 'Allow'})
+        if(-not $direct.Count -or @($direct | Where-Object {($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Write) -ne 0}).Count){throw 'Service received write rights to the prepared private key or credential reference path.'}
+        if($protectedFile -ne $keyFile -and $fileAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544'){throw 'Prepared credential path owner is not Administrators.'}
     }
     # Mimic AM4's read-only machine-key directories for this exact test identity.
     # Never replace a global ACL or grant broader rights; restore both in finally.
@@ -103,7 +105,7 @@ public static class SscFixtureHttp {
         $modeRecords=@($records|Where-Object {$freshStarts.ProcessId -contains $_.ProcessId})
         $comparison=[pscustomobject]@{Provider=$Provider;Mode=$mode;AuthenticatedHttps=$healthy;ImportSucceeded=[bool]@($modeRecords|Where-Object {$_.Stage -in @('PfxImportComplete','EphemeralImportComplete')}).Count;SigningSucceeded=[bool]@($modeRecords|Where-Object Stage -eq 'SigningProbeComplete').Count;FailureHResult=if($failures.Count){$failures[0].HResult}else{$null}}
         $comparisons+=$comparison;$comparison|ConvertTo-Json -Compress|Write-Host
-        if($mode -eq 'Machine' -and ($healthy -or $failures.Count -ne 1)){throw 'Restricted machine-key import was not reproduced as a service failure.'}
+        if($mode -eq 'Machine' -and ($healthy -or $failures.Count -ne 1 -or $comparison.FailureHResult -ne '0x80090010' -or $comparison.ImportSucceeded -or $comparison.SigningSucceeded)){throw 'Restricted machine-key import did not reproduce NTE_PERM 0x80090010 before import/signing completed.'}
         Stop-Service SSC.Agent -ErrorAction SilentlyContinue
         (Get-Service SSC.Agent).WaitForStatus('Stopped',[TimeSpan]::FromSeconds(20))
     }
@@ -130,14 +132,15 @@ public static class SscFixtureHttp {
     $import=@($entries | Where-Object Stage -eq 'StoreKeyOpenBegin')[0]
     if(-not $scm -or -not $import -or $scm.Account -ne 'NT SERVICE\SSC.Agent' -or $scm.ElapsedMs -ge 5000 -or $scm.ElapsedMs -gt $import.ElapsedMs){throw 'Private key work happened before SCM connected.'}
     $before=Get-FileHash "$root\Agent\service.json","$root\Agent\identity.pfx","$root\Secrets\agent-pfx.bin","$root\Credentials\Agent\identity.json"
-    & "$PSScriptRoot\..\..\scripts\Update-SscService.ps1" -Role Agent -PublishDirectory $PublishDirectory -BackupDirectory "$artifacts\update-backup"
+    & powershell.exe -NoProfile -NonInteractive -File "$PSScriptRoot\..\..\scripts\Update-SscService.ps1" -Role Agent -PublishDirectory $PublishDirectory -BackupDirectory "$artifacts\update-backup"
+    if($LASTEXITCODE -ne 0){throw 'Windows PowerShell 5.1 updater failed.'}
     $after=Get-FileHash "$root\Agent\service.json","$root\Agent\identity.pfx","$root\Secrets\agent-pfx.bin","$root\Credentials\Agent\identity.json"
     if(Compare-Object $before.Hash $after.Hash){throw 'Updater changed production configuration/certificate/secret bytes.'}
     $heartbeat=$null;$deadline=(Get-Date).AddSeconds(35)
     do{try{$heartbeat=[SscFixtureHttp]::Get($clientCert,$serverPin).GetAwaiter().GetResult() | ConvertFrom-Json;break}catch{Start-Sleep -Milliseconds 500}}while((Get-Date) -lt $deadline)
     if(-not $heartbeat.agentHealthy){throw 'Updated service lost authenticated heartbeat.'}
-    # Missing/wrong DPAPI password must produce a bounded, independent startup failure,
-    # then recover after restoring the encrypted bytes. This fixture never uses production secrets.
+    # Wrong DPAPI password must fail administrator preparation while the existing service stays running.
+    # Restore the encrypted bytes afterward; this fixture never uses production secrets.
     $protectedOriginal=[IO.File]::ReadAllBytes("$root\Secrets\agent-pfx.bin")
     $beforePreflightPid=(Get-CimInstance Win32_Service -Filter "Name='SSC.Agent'").ProcessId
     $bad=[Text.Encoding]::UTF8.GetBytes('intentionally-wrong-fixture-password')
@@ -169,14 +172,37 @@ public static class SscFixtureHttp {
             $candidate.UtcTimestamp.ToString('O'),$failureStart.ToString('O'),($candidate.UtcTimestamp -ge $failureStart),$candidate.SourceFile,
             ($failure.ProcessKey -contains $candidate.ProcessKey))
     }
-    if($failure.Count -ne 1){throw 'Bad password must emit exactly one StartupFailed for the fresh process; see predicate diagnostics.'}
+    if($failure.Count -ne 1){throw 'Private-key read denial must emit exactly one StartupFailed for the fresh process; see predicate diagnostics.'}
     if($failure[0].ErrorType -ne 'CryptographicException' -or @('0x80090010','0x80070005','0x80090016') -notcontains $failure[0].HResult){throw 'Key-read denial failed for an unexpected reason.'}
     (Get-Service SSC.Agent).WaitForStatus('Stopped',[TimeSpan]::FromSeconds(20))
     $restored=Get-Acl $keyFile;$restored.SetSecurityDescriptorSddlForm($keyAclBefore);Set-Acl $keyFile $restored;$keyAclBefore=$null
     Start-Service SSC.Agent
     $heartbeat=$null;$deadline=(Get-Date).AddSeconds(35)
     do {try{$heartbeat=[SscFixtureHttp]::Get($clientCert,$serverPin).GetAwaiter().GetResult() | ConvertFrom-Json;break}catch{Start-Sleep -Milliseconds 500}}while((Get-Date) -lt $deadline)
-    if(-not $heartbeat.agentHealthy){throw 'Service did not recover authenticated heartbeat after secret restoration.'}
+    if(-not $heartbeat.agentHealthy){throw 'Service did not recover authenticated heartbeat after private-key access restoration.'}
+    # A missing store certificate must fail closed without reimporting the PFX or creating keys.
+    Stop-Service SSC.Agent
+    (Get-Service SSC.Agent).WaitForStatus('Stopped',[TimeSpan]::FromSeconds(20))
+    $store=[Security.Cryptography.X509Certificates.X509Store]::new('My','LocalMachine')
+    try{$store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite);$store.Remove($storeCert);$storeCertificateRemoved=$true}finally{$store.Dispose()}
+    try {
+        $knownProcessKeys=@(Get-SscStartupRecords -Directory $journalDirectory | Where-Object Stage -eq 'ProcessEntry' | ForEach-Object ProcessKey)
+        & sc.exe start SSC.Agent | Out-Null
+        $deadline=(Get-Date).AddSeconds(30);$failure=@()
+        while((Get-Date) -lt $deadline){
+            $failure=@(Find-SscFreshStartupFailure -Records @(Get-SscStartupRecords -Directory $journalDirectory) -KnownProcessKeys $knownProcessKeys)
+            if($failure.Count){break};Start-Sleep -Milliseconds 500
+        }
+        if($failure.Count -ne 1 -or $failure[0].ErrorType -ne 'CryptographicException'){throw 'Missing store certificate did not emit one cryptographic startup failure.'}
+        (Get-Service SSC.Agent).WaitForStatus('Stopped',[TimeSpan]::FromSeconds(20))
+    } finally {
+        $store=[Security.Cryptography.X509Certificates.X509Store]::new('My','LocalMachine')
+        try{$store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite);$store.Add($storeCert);$storeCertificateRemoved=$false}finally{$store.Dispose()}
+    }
+    Start-Service SSC.Agent
+    $heartbeat=$null;$deadline=(Get-Date).AddSeconds(35)
+    do{try{$heartbeat=[SscFixtureHttp]::Get($clientCert,$serverPin).GetAwaiter().GetResult()|ConvertFrom-Json;break}catch{Start-Sleep -Milliseconds 500}}while((Get-Date) -lt $deadline)
+    if(-not $heartbeat.agentHealthy){throw 'Restoring the same store certificate did not recover authenticated heartbeat.'}
     # A tampered package must be rejected before stopping the healthy service.
     $corrupt=Join-Path $artifacts 'corrupt-package';New-Item $corrupt -ItemType Directory | Out-Null
     Copy-Item (Join-Path $PublishDirectory '*') $corrupt -Recurse -Force
@@ -190,12 +216,14 @@ public static class SscFixtureHttp {
     Copy-Item (Join-Path $PublishDirectory '*') $broken -Recurse -Force
     $runtime=Join-Path $broken 'SSC.Agent.runtimeconfig.json'
     (Get-Content $runtime -Raw).Replace('8.0.0','99.0.0') | Set-Content $runtime -Encoding utf8
+    Set-Content (Join-Path $broken 'introduced-by-failed-update.txt') 'Fixture-only file that rollback must remove'
     & "$PSScriptRoot\..\..\scripts\Write-SscDeploymentManifest.ps1" -Role Agent -Directory $broken
     $rolledBack=$false
     try{ & "$PSScriptRoot\..\..\scripts\Update-SscService.ps1" -Role Agent -PublishDirectory $broken -BackupDirectory "$artifacts\expected-rollback" }catch{$rolledBack=$true}
     $rollback=Get-Content "$artifacts\expected-rollback\rollback-result.json" -Raw | ConvertFrom-Json
     if(-not $rollback.OperationalVerified -or -not $rollback.HttpsJournalReady){throw 'Updater did not verify previous Agent operational recovery.'}
     if(-not $rolledBack -or (Get-Service SSC.Agent).Status -ne 'Running'){throw 'Failed update did not restore the previous running service.'}
+    if(Test-Path (Join-Path $target 'introduced-by-failed-update.txt')){throw 'Rollback left a file introduced by the failed update.'}
     $heartbeat=$null;$deadline=(Get-Date).AddSeconds(35)
     do{try{$heartbeat=[SscFixtureHttp]::Get($clientCert,$serverPin).GetAwaiter().GetResult() | ConvertFrom-Json;break}catch{Start-Sleep -Milliseconds 500}}while((Get-Date) -lt $deadline)
     if(-not $heartbeat.agentHealthy){throw 'Automatic rollback lost authenticated heartbeat.'}
@@ -217,11 +245,15 @@ public static class SscFixtureHttp {
     $consecutive=0
     for($check=0;$check -lt 3;$check++){$reply=[SscFixtureHttp]::Get($clientCert,$serverPin).GetAwaiter().GetResult()|ConvertFrom-Json;if($reply.agentHealthy){$consecutive++}else{$consecutive=0}}
     if($consecutive -ne 3){throw 'Three authenticated heartbeat checks failed.'}
-    [pscustomobject]@{RollbackFailureReported=$true;ThreeAuthenticatedHeartbeats=$consecutive;Provider=$Provider;RestrictedKeyDirectories=$true;FailureDiagnostics=$true;SecretRestorationRecovery=$true;TamperRejectedBeforeStop=$true;AutomaticRollback=$true;ScmSeconds=$scmSeconds;ScmBeforePrivateKeyImport=$true;UpdatePreservedSecrets=$true;Service='SSC.Agent';Identity=(Get-CimInstance Win32_Service -Filter "Name='SSC.Agent'").StartName;StartupSeconds=$timer.Elapsed.TotalSeconds;AuthenticatedHeartbeat=$true;ObservedAt=$heartbeat.observedAt} |
+    [pscustomobject]@{MissingCertificateRejected=$true;CertificateRestorationRecovery=$true;WindowsPowerShell51Updater=$true;IntroducedFileRemovedOnRollback=$true;RollbackFailureReported=$true;ThreeAuthenticatedHeartbeats=$consecutive;Provider=$Provider;RestrictedKeyDirectories=$true;FailureDiagnostics=$true;SecretRestorationRecovery=$true;TamperRejectedBeforeStop=$true;AutomaticRollback=$true;ScmSeconds=$scmSeconds;ScmBeforePrivateKeyImport=$true;UpdatePreservedSecrets=$true;Service='SSC.Agent';Identity=(Get-CimInstance Win32_Service -Filter "Name='SSC.Agent'").StartName;StartupSeconds=$timer.Elapsed.TotalSeconds;AuthenticatedHeartbeat=$true;ObservedAt=$heartbeat.observedAt} |
         ConvertTo-Json | Set-Content "$artifacts\result.json"
     Get-Content "$artifacts\result.json"
 } finally {
     Stop-Service SSC.Agent -ErrorAction SilentlyContinue
+    if($storeCertificateRemoved){
+        $store=[Security.Cryptography.X509Certificates.X509Store]::new('My','LocalMachine')
+        try{$store.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite);$store.Add($storeCert)}finally{$store.Dispose()}
+    }
     if($keyFile -and $keyAclBefore){$acl=Get-Acl $keyFile;$acl.SetSecurityDescriptorSddlForm($keyAclBefore);Set-Acl $keyFile $acl}
     foreach($directory in $directoryAcls.Keys){$acl=Get-Acl $directory;$acl.SetSecurityDescriptorSddlForm($directoryAcls[$directory]);Set-Acl $directory $acl}
     # Restore fixture credentials even when the assertion/polling fails. Never leave a bad

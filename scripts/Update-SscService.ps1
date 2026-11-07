@@ -87,12 +87,22 @@ try {
 } catch {
     $failure=$_
     if($backupComplete -and $copyStarted){
-        Stop-Service $name -ErrorAction SilentlyContinue
-        Copy-Item (Join-Path $binaryBackup '*') $target -Recurse -Force
-        $null=Assert-Package $target
-        $rollbackStarted=[DateTimeOffset]::UtcNow
-        $rollback=[ordered]@{BinariesVerified=$true;ServiceRunning=$false;PreviousExpectedRunning=$wasRunning;OperationalVerified=$false;AuthenticatedHeartbeatVerified=$false}
+        $rollback=[ordered]@{BinariesVerified=$false;ServiceRunning=$false;PreviousExpectedRunning=$wasRunning;OperationalVerified=$false;AuthenticatedHeartbeatVerified=$false}
         try {
+            Stop-Service $name -ErrorAction Stop
+            (Get-Service $name).WaitForStatus('Stopped',[TimeSpan]::FromSeconds(30))
+            $previousManifest=Assert-Package $binaryBackup
+            # Remove only files introduced by this update. Leave unrelated installation files intact.
+            foreach($file in $manifest.Files){
+                if($previousManifest.Files.Path -notcontains $file.Path){
+                    $introduced=Join-Path $target $file.Path
+                    if(Test-Path $introduced -PathType Leaf){Remove-Item $introduced -Force}
+                }
+            }
+            Copy-Item (Join-Path $binaryBackup '*') $target -Recurse -Force
+            $null=Assert-Package $target
+            $rollback.BinariesVerified=$true
+            $rollbackStarted=[DateTimeOffset]::UtcNow
             if($wasRunning){
                 Start-Service $name;(Get-Service $name).WaitForStatus('Running',[TimeSpan]::FromSeconds(30))
                 if($Role -eq 'Agent'){
@@ -105,7 +115,7 @@ try {
         }catch{
             $rollback.ErrorType=$_.Exception.GetType().Name
             $rollback.ServiceRunning=(Get-Service $name -ErrorAction SilentlyContinue).Status -eq 'Running'
-            Write-Warning 'Rollback files verified, but previous service operational recovery FAILED. Inspect rollback-result.json and startup logs.'
+            Write-Warning 'Rollback recovery FAILED. Inspect rollback-result.json for binary verification and service status, plus startup logs.'
             throw
         }finally{$rollback | ConvertTo-Json | Set-Content (Join-Path $BackupDirectory 'rollback-result.json') -Encoding UTF8}
         Write-Warning ("Patch failed; previous binaries restored. Previous operational={0}; level={1}. AM5 authenticated heartbeats remain a separate check." -f $rollback.OperationalVerified,$rollback.VerificationLevel)

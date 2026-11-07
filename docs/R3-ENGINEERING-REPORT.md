@@ -1,6 +1,6 @@
 # R3 engineering report
 
-Date: November 1, 2026 (America/Chicago). Issue #2: https://github.com/Ghost9353/ShadowServerCommand/issues/2 . Branch `r3/tls-key-access-recovery`; PR https://github.com/Ghost9353/ShadowServerCommand/pull/3 . No production deployment or main-branch merge is performed.
+Date: November 7, 2026 (UTC). Issue #2: https://github.com/Ghost9353/ShadowServerCommand/issues/2 . Branch `r3/tls-key-access-recovery`; PR https://github.com/Ghost9353/ShadowServerCommand/pull/3 . No production deployment or main-branch merge is performed.
 
 ## Root-cause evidence
 
@@ -19,12 +19,12 @@ Ephemeral signing/import success was not adopted as a TLS solution. The selected
 
 ## Implementation
 
-- New `AgentMachineCredential`: admin-only same-identity persistent import, expected existing SHA256 check, exact key-file Read grant, protected public source reference; service read-only store lookup, source PFX path/hash binding, key signing and purpose/validity validation.
+- New `AgentMachineCredential`: admin-only same-identity persistent import, expected existing SHA256 check, exact key-file Read grant, Administrators-owned protected public source reference, reparse rejection and atomic publication; service read-only store lookup, source PFX path/hash binding, key signing and purpose/validity validation.
 - `AgentCertificateOwner` uses the prepared credential on Windows after SCM connects. Existing deadlines, ownership/disposal, Kestrel client authentication and pinning remain. The Agent no longer creates machine key containers or decrypts PFX passwords at service startup.
 - `TlsCertificateLoader` shares its existing signing/purpose validator; default file import remains unchanged for other callers. No AM5 configuration/binary deployment is included.
 - `Prepare-SscAgentTls.ps1` verifies package integrity and runs preparation without stopping/listening as the service. It requires the existing public AM5 server pin and preserves preexisting ProgramData bytes.
-- `Update-SscService.ps1`, `Ssc-ServiceReadiness.ps1`, `Write-SscDeploymentManifest.ps1`: prepared-reference preflight, verified backup/deployment, PID/creation-time-safe readiness and measured rollback results. Original operational recovery is verified rather than assumed; local checks never claim authenticated AM5 proof.
-- `tests/Windows/AgentServiceStartup.ps1`, isolated `tests/SSC.TlsServiceHarness`, workflow matrix: real service tests with two key providers and restricted creation, plus import/sign/HTTPS comparisons, restart, bad-password preflight, wrong expected pin, key read denial, hash tampering, successful rollback and honestly reported unsuccessful rollback.
+- `Update-SscService.ps1`, `Ssc-ServiceReadiness.ps1`, `Write-SscDeploymentManifest.ps1`: prepared-reference preflight, verified backup/deployment, PID/creation-time-safe readiness and measured rollback results even when copy/hash restoration fails, shutdown waiting, and removal of only update-introduced files. Original operational recovery is verified rather than assumed; local checks never claim authenticated AM5 proof.
+- `tests/Windows/AgentServiceStartup.ps1`, isolated `tests/SSC.TlsServiceHarness`, workflow matrix: real service tests with two key providers and restricted creation, plus import/sign/HTTPS comparisons, restart, bad-password preflight, wrong expected pin, key read denial, missing-store-certificate startup/recovery, hash tampering, successful rollback and honestly reported unsuccessful rollback. Preparation and the successful update execute under Windows PowerShell 5.1; AM5 verification has 5.1/7 deterministic freshness regressions.
 
 No domain schema, Minecraft files/processes, production certificates/secret values, AM5 settings, firewall exposure, TLS trust weakening or administrative network control was added. Preparation necessarily adds a protected persistent copy of the existing key and a public reference; it does not regenerate key material/certificate identity or alter the original PFX/config/DPAPI files.
 
@@ -43,13 +43,15 @@ The Windows real-service matrix additionally confirms:
 - Read-only service access to the exact key and reference; deliberate key-read denial fails with a safe native diagnostic, and ACL restoration recovers mTLS.
 - Tampered package rejected before stop; failed update restores prior working service; deliberately unhealthy restored service yields OperationalVerified=false, followed by tested recovery after permission restoration.
 
-Green provider runs before the final rollback-reporting enhancement: https://github.com/Ghost9353/ShadowServerCommand/actions/runs/41389300631 and https://github.com/Ghost9353/ShadowServerCommand/actions/runs/41389768241 . Final full matrix including failed-operational-rollback reporting: https://github.com/Ghost9353/ShadowServerCommand/actions/runs/41390115249 (PR) and https://github.com/Ghost9353/ShadowServerCommand/actions/runs/41390110436 (push). Tested code/script commit: `611d7de3e7b6bdffe0abd0e0075211e8aec89345`.
+Green provider runs before the final rollback-reporting enhancement: https://github.com/Ghost9353/ShadowServerCommand/actions/runs/41389300631 and https://github.com/Ghost9353/ShadowServerCommand/actions/runs/41389768241 . Prior full matrix including failed-operational-rollback reporting: https://github.com/Ghost9353/ShadowServerCommand/actions/runs/41390115249 (PR) and https://github.com/Ghost9353/ShadowServerCommand/actions/runs/41390110436 (push). The later pre-finalization code/script commit `8144cc7ceac294b824218ad1385891503bd91ff2` also passed both providers, including PowerShell 5.1 preparation: https://github.com/Ghost9353/ShadowServerCommand/actions/runs/41391314570 .
+
+Finalization additionally hardens reference ownership/atomic publication, requires three distinct fresh AM5 observations, checks exact NTE_PERM, adds missing-certificate recovery, and improves rollback reporting/file cleanup. Its own current-commit Windows matrix must execute successfully before packaging. The `package-r3` job depends on both provider jobs, publishes the Agent from that same commit, and verifies the complete extracted ZIP using Windows PowerShell 5.1. The release manifest records that exact source commit. PR #3 contains the final run links, artifact URL, measured checksums and review status; do not use a previous green run as evidence for an untested later commit.
 
 These are controlled Windows runner tests, including real OS crypto permissions and real HTTPS, not actual AM4 deployment. The three checks are accelerated loopback protocol checks, not the operator's AM5 Watchdog completing its 15-second schedule. Production success is explicitly unverified until the staged runbook yields three fresh authenticated AM5 heartbeats. Exact AM4 provider/container state remains an operator verification item; no CAPI2 informational event alone is treated as proof.
 
 ## Delivery and live acceptance
 
-R3 is an Agent-only Windows x64 framework-dependent candidate ZIP, with full per-file manifest (CredentialMode=ProvisionedMachineStore), SHA256 checksum file, source ZIP and staged preparation/update/rollback instructions. See [R3-TLS-RECOVERY.md](R3-TLS-RECOVERY.md). The dedicated branch/PR stays separate from main. No test harness, fixture certificate or secret is shipped in the runtime ZIP.
+R3 is the Agent-only `SSC-Minecraft-Watchdog-R3-win-x64.zip` Windows x64 framework-dependent candidate ZIP, with full per-file manifest (CredentialMode=ProvisionedMachineStore), SHA256 checksum file, source ZIP, release-level integrity manifest and staged preparation/update/rollback instructions. See [R3-TLS-RECOVERY.md](R3-TLS-RECOVERY.md). The dedicated branch/PR stays separate from main. No test harness, fixture certificate or secret is shipped in the runtime ZIP.
 
 Existing .NET/ASP.NET Core 8 x64 runtimes are required. Preparation is additive, identity-checked, least-privilege and does not stop the existing service. Updating/restoring happens only when the operator explicitly runs the updater. All existing ProgramData data/config/PFX/DPAPI bytes and AM5 settings are preserved. Prepared credentials are retained on binary rollback for safety; automatic deletion of potentially shared keys is intentionally avoided.
 

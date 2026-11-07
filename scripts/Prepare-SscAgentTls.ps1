@@ -10,6 +10,9 @@ if(-not $PSCmdlet.ShouldProcess('existing Agent certificate','Prepare persistent
 $directory=(Resolve-Path $AgentPublishDirectory).Path
 $manifest=Get-Content (Join-Path $directory 'deployment-manifest.json') -Raw | ConvertFrom-Json
 if($manifest.Role -ne 'Agent' -or -not $manifest.Files){throw 'Invalid Agent deployment manifest.'}
+foreach($required in @('SSC.Agent.exe','SSC.Agent.dll','SSC.Agent.deps.json','SSC.Agent.runtimeconfig.json','SSC.Infrastructure.dll')){
+    if($manifest.Files.Path -notcontains $required){throw "Required preparation binary missing from manifest: $required"}
+}
 foreach($file in $manifest.Files){
     $full=[IO.Path]::GetFullPath((Join-Path $directory $file.Path))
     if(-not $full.StartsWith($directory.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase) -or (Get-FileHash $full -Algorithm SHA256).Hash -ne $file.Sha256){throw 'Preparation package integrity failed; service untouched.'}
